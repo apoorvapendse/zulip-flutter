@@ -17,6 +17,7 @@ import 'package:zulip/model/narrow.dart';
 import 'package:zulip/model/settings.dart';
 import 'package:zulip/model/store.dart';
 
+import 'model/binding.dart';
 import 'model/test_store.dart';
 import 'stdlib_checks.dart';
 
@@ -24,7 +25,7 @@ void _checkPositive(int? value, String description) {
   assert(value == null || value > 0, '$description should be positive');
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Error objects.
 //
 
@@ -70,7 +71,7 @@ ZulipApiException apiExceptionUnauthorized({String routeName = 'someRoute'}) {
     data: {}, message: 'Invalid API key');
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Time values.
 //
 
@@ -84,7 +85,7 @@ int utcTimestamp([DateTime? dateTime]) {
   return dateTime.toUtc().millisecondsSinceEpoch ~/ 1000;
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Realm-wide (or server-wide) metadata.
 //
 
@@ -130,7 +131,32 @@ GetServerSettingsResult serverSettings({
   );
 }
 
-ServerEmojiData serverEmojiDataPopular = ServerEmojiData(codeToNames: {
+CustomProfileField customProfileField(
+  int id,
+  CustomProfileFieldType type, {
+  int? order,
+  bool? displayInProfileSummary,
+  String? fieldData,
+}) {
+  return CustomProfileField(
+    id: id,
+    type: type,
+    order: order ?? id,
+    name: 'field$id',
+    hint: 'hint$id',
+    fieldData: fieldData ?? '',
+    displayInProfileSummary: displayInProfileSummary ?? false,
+  );
+}
+
+ServerEmojiData _immutableServerEmojiData({
+    required Map<String, List<String>> codeToNames}) {
+  return ServerEmojiData(
+    codeToNames: Map.unmodifiable(codeToNames.map(
+      (k, v) => MapEntry(k, List<String>.unmodifiable(v)))));
+}
+
+final ServerEmojiData serverEmojiDataPopular = _immutableServerEmojiData(codeToNames: {
   '1f44d': ['+1', 'thumbs_up', 'like'],
   '1f389': ['tada'],
   '1f642': ['slight_smile'],
@@ -157,7 +183,7 @@ ServerEmojiData serverEmojiDataPopularPlus(ServerEmojiData data) {
 ///
 /// zulip/zulip@9feba0f16f is a Server 11 commit.
 // TODO(server-11) can drop this
-ServerEmojiData serverEmojiDataPopularLegacy = ServerEmojiData(codeToNames: {
+final ServerEmojiData serverEmojiDataPopularLegacy = _immutableServerEmojiData(codeToNames: {
   '1f44d': ['+1', 'thumbs_up', 'like'],
   '1f389': ['tada'],
   '1f642': ['smile'],
@@ -172,6 +198,8 @@ int _lastUserGroupId = 100;
 
 UserGroup userGroup({
   int? id,
+  Iterable<int>? members,
+  Iterable<int>? directSubgroupIds,
   String? name,
   String? description,
   bool isSystemGroup = false,
@@ -179,12 +207,20 @@ UserGroup userGroup({
 }) {
   return UserGroup(
     id: id ??= _nextUserGroupId(),
+    members: Set.of(members ?? []),
+    directSubgroupIds: Set.of(directSubgroupIds ?? []),
     name: name ??= 'group-$id',
     description: description ?? 'A group named $name',
     isSystemGroup: isSystemGroup,
     deactivated: deactivated,
   );
 }
+
+final UserGroup nobodyGroup = userGroup(
+  isSystemGroup: true,
+  name: 'role:nobody', description: 'Nobody',
+  members: [], directSubgroupIds: [],
+);
 
 RealmEmojiItem realmEmojiItem({
   required String emojiCode,
@@ -205,7 +241,7 @@ RealmEmojiItem realmEmojiItem({
   );
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Users and accounts.
 //
 
@@ -225,7 +261,7 @@ int _lastEmailSuffix = 1000;
 /// other data in the test, or if the IDs need to increase in a different order
 /// from the calls to [user].
 ///
-/// If `email` is not given, it defaults to `deliveryEmail` if given,
+/// If `email` is not given, it defaults to `deliveryEmail` if given and non-null,
 /// or else to a value resembling the Zulip server's generated fake emails.
 User user({
   int? userId,
@@ -235,6 +271,7 @@ User user({
   String? dateJoined,
   bool? isActive,
   bool? isBot,
+  int? botOwnerId,
   UserRole? role,
   String? avatarUrl,
   Map<int, ProfileFieldUserData>? profileData,
@@ -248,10 +285,9 @@ User user({
     fullName: fullName ?? 'A user', // TODO generate example names
     dateJoined: dateJoined ?? '2024-02-24T11:18+00:00',
     isActive: isActive ?? true,
-    isBillingAdmin: false,
     isBot: isBot ?? false,
     botType: null,
-    botOwnerId: null,
+    botOwnerId: botOwnerId,
     role: role ?? UserRole.member,
     timezone: 'UTC',
     avatarUrl: avatarUrl,
@@ -288,26 +324,83 @@ Account account({
     ackedPushToken: ackedPushToken,
   );
 }
+const _account = account;
 
-final User selfUser = user(fullName: 'Self User');
+/// A [User] which throws on attempting to mutate any of its fields.
+///
+/// We use this to prevent any tests from leaking state through having a
+/// [PerAccountStore] (which will be discarded when [TestZulipBinding.reset]
+/// is called at the end of the test case) mutate a [User] in its [UserStore]
+/// which happens to a value in this file like [selfUser] (which will not be
+/// discarded by [TestZulipBinding.reset]).  That was the cause of issue #1712.
+class _ImmutableUser extends User {
+  _ImmutableUser.copyUser(User user) : super(
+    // When adding a field here, be sure to add the corresponding setter below.
+    userId: user.userId,
+    deliveryEmail: user.deliveryEmail,
+    email: user.email,
+    fullName: user.fullName,
+    dateJoined: user.dateJoined,
+    isActive: user.isActive,
+    isBot: user.isBot,
+    botType: user.botType,
+    botOwnerId: user.botOwnerId,
+    role: user.role,
+    timezone: user.timezone,
+    avatarUrl: user.avatarUrl,
+    avatarVersion: user.avatarVersion,
+    profileData: user.profileData == null ? null : Map.unmodifiable(user.profileData!),
+    isSystemBot: user.isSystemBot,
+    // When adding a field here, be sure to add the corresponding setter below.
+  );
+
+  static final Error _error = UnsupportedError(
+    'Cannot mutate immutable User.\n'
+    'When a test needs to have the store handle an event which will\n'
+    'modify a user, use `eg.user()` to make a fresh User object\n'
+    'instead of using a shared User object like `eg.selfUser`.');
+
+  // userId already immutable
+  @override set deliveryEmail(_) => throw _error;
+  @override set email(_) => throw _error;
+  @override set fullName(_) => throw _error;
+  // dateJoined already immutable
+  @override set isActive(_) => throw _error;
+  // isBot already immutable
+  // botType already immutable
+  @override set botOwnerId(_) => throw _error;
+  @override set role(_) => throw _error;
+  @override set timezone(_) => throw _error;
+  @override set avatarUrl(_) => throw _error;
+  @override set avatarVersion(_) => throw _error;
+  @override set profileData(_) => throw _error;
+  // isSystemBot already immutable
+}
+
+final User selfUser = _ImmutableUser.copyUser(user(fullName: 'Self User'));
+final User otherUser = _ImmutableUser.copyUser(user(fullName: 'Other User'));
+final User thirdUser = _ImmutableUser.copyUser(user(fullName: 'Third User'));
+final User fourthUser  = _ImmutableUser.copyUser(user(fullName: 'Fourth User'));
+
+// There's no need for an [Account] analogue of [_ImmutableUser],
+// because [Account] (which is generated by Drift) is already immutable.
 final Account selfAccount = account(
   id: 1001,
   user: selfUser,
   apiKey: 'dQcEJWTq3LczosDkJnRTwf31zniGvMrO', // A Zulip API key is 32 digits of base64.
 );
-
-final User otherUser = user(fullName: 'Other User');
 final Account otherAccount = account(
   id: 1002,
   user: otherUser,
   apiKey: '6dxT4b73BYpCTU+i4BB9LAKC5h/CufqY', // A Zulip API key is 32 digits of base64.
 );
+final Account thirdAccount = account(
+  id: 1003,
+  user: thirdUser,
+  apiKey: 'q8HdN7u5Yz3Wc9LhQv1Rb4o2sXjKf6Ut', // A Zulip API key is 32 digits of base64.
+);
 
-final User thirdUser = user(fullName: 'Third User');
-
-final User fourthUser  = user(fullName: 'Fourth User');
-
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Data attached to the self-account on the realm
 //
 
@@ -329,7 +422,7 @@ SavedSnippet savedSnippet({
   );
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Streams and subscriptions.
 //
 
@@ -348,6 +441,7 @@ ZulipStream stream({
   int? streamId,
   String? name,
   String? description,
+  bool? isArchived,
   String? renderedDescription,
   int? dateCreated,
   int? firstMessageId,
@@ -356,6 +450,10 @@ ZulipStream stream({
   bool? historyPublicToSubscribers,
   int? messageRetentionDays,
   ChannelPostPolicy? channelPostPolicy,
+  GroupSettingValue? canAddSubscribersGroup,
+  GroupSettingValue? canDeleteAnyMessageGroup,
+  GroupSettingValue? canDeleteOwnMessageGroup,
+  GroupSettingValue? canSubscribeGroup,
   int? streamWeeklyTraffic,
 }) {
   _checkPositive(streamId, 'stream ID');
@@ -366,6 +464,7 @@ ZulipStream stream({
   return ZulipStream(
     streamId: effectiveStreamId,
     name: effectiveName,
+    isArchived: isArchived ?? false,
     description: effectiveDescription,
     renderedDescription: renderedDescription ?? '<p>$effectiveDescription</p>',
     dateCreated: dateCreated ?? 1686774898,
@@ -375,6 +474,10 @@ ZulipStream stream({
     historyPublicToSubscribers: historyPublicToSubscribers ?? true,
     messageRetentionDays: messageRetentionDays,
     channelPostPolicy: channelPostPolicy ?? ChannelPostPolicy.any,
+    canAddSubscribersGroup: canAddSubscribersGroup ?? GroupSettingValueNamed(nobodyGroup.id),
+    canDeleteAnyMessageGroup: canDeleteAnyMessageGroup ?? GroupSettingValueNamed(nobodyGroup.id),
+    canDeleteOwnMessageGroup: canDeleteOwnMessageGroup ?? GroupSettingValueNamed(nobodyGroup.id),
+    canSubscribeGroup: canSubscribeGroup ?? GroupSettingValueNamed(nobodyGroup.id),
     streamWeeklyTraffic: streamWeeklyTraffic,
   );
 }
@@ -404,6 +507,7 @@ Subscription subscription(
   return Subscription(
     streamId: stream.streamId,
     name: stream.name,
+    isArchived: stream.isArchived,
     description: stream.description,
     renderedDescription: stream.renderedDescription,
     dateCreated: stream.dateCreated,
@@ -413,6 +517,10 @@ Subscription subscription(
     historyPublicToSubscribers: stream.historyPublicToSubscribers,
     messageRetentionDays: stream.messageRetentionDays,
     channelPostPolicy: stream.channelPostPolicy,
+    canAddSubscribersGroup: stream.canAddSubscribersGroup,
+    canDeleteAnyMessageGroup: stream.canDeleteAnyMessageGroup,
+    canDeleteOwnMessageGroup: stream.canDeleteOwnMessageGroup,
+    canSubscribeGroup: stream.canSubscribeGroup,
     streamWeeklyTraffic: stream.streamWeeklyTraffic,
     desktopNotifications: desktopNotifications ?? false,
     emailNotifications: emailNotifications ?? false,
@@ -444,25 +552,25 @@ UserTopicItem userTopicItem(
   );
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Messages, and pieces of messages.
 //
 
-Reaction unicodeEmojiReaction = Reaction(
+final Reaction unicodeEmojiReaction = Reaction(
   emojiName: 'thumbs_up',
   emojiCode: '1f44d',
   reactionType: ReactionType.unicodeEmoji,
   userId: selfUser.userId,
 );
 
-Reaction realmEmojiReaction = Reaction(
+final Reaction realmEmojiReaction = Reaction(
   emojiName: 'twocents',
   emojiCode: '181',
   reactionType: ReactionType.realmEmoji,
   userId: selfUser.userId,
 );
 
-Reaction zulipExtraEmojiReaction = Reaction(
+final Reaction zulipExtraEmojiReaction = Reaction(
   emojiName: 'zulip',
   emojiCode: 'zulip',
   reactionType: ReactionType.zulipExtraEmoji,
@@ -788,7 +896,7 @@ Submessage submessage({
   );
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Aggregate data structures.
 //
 
@@ -823,7 +931,7 @@ UnreadMessagesSnapshot unreadMsgs({
 }
 const _unreadMsgs = unreadMsgs;
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // Events.
 //
 
@@ -864,7 +972,7 @@ DeleteMessageEvent deleteMessageEvent(List<StreamMessage> messages) {
 UpdateMessageEvent updateMessageEditEvent(
   Message origMessage, {
   int? userId = -1, // null means null; default is [selfUser.userId]
-  bool? renderingOnly = false,
+  bool renderingOnly = false,
   int? messageId,
   List<MessageFlag>? flags,
   int? editTimestamp,
@@ -1074,6 +1182,9 @@ ChannelUpdateEvent channelUpdateEvent(
 }) {
   switch (property) {
     case ChannelPropertyName.name:
+      assert(value is String);
+    case ChannelPropertyName.isArchived:
+      assert(value is bool);
     case ChannelPropertyName.description:
       assert(value is String);
     case ChannelPropertyName.firstMessageId:
@@ -1084,6 +1195,11 @@ ChannelUpdateEvent channelUpdateEvent(
       assert(value is int?);
     case ChannelPropertyName.channelPostPolicy:
       assert(value is ChannelPostPolicy);
+    case ChannelPropertyName.canAddSubscribersGroup:
+    case ChannelPropertyName.canDeleteAnyMessageGroup:
+    case ChannelPropertyName.canDeleteOwnMessageGroup:
+    case ChannelPropertyName.canSubscribeGroup:
+      assert(value is GroupSettingValue);
     case ChannelPropertyName.streamWeeklyTraffic:
       assert(value is int?);
   }
@@ -1096,18 +1212,20 @@ ChannelUpdateEvent channelUpdateEvent(
   );
 }
 
-////////////////////////////////////////////////////////////////
+//|//////////////////////////////////////////////////////////////
 // The entire per-account or global state.
 //
 
 TestGlobalStore globalStore({
   GlobalSettingsData? globalSettings,
   Map<BoolGlobalSetting, bool>? boolGlobalSettings,
+  Map<IntGlobalSetting, int>? intGlobalSettings,
   List<Account> accounts = const [],
 }) {
   return TestGlobalStore(
     globalSettings: globalSettings,
     boolGlobalSettings: boolGlobalSettings,
+    intGlobalSettings: intGlobalSettings,
     accounts: accounts,
   );
 }
@@ -1123,7 +1241,6 @@ InitialSnapshot initialSnapshot({
   String? zulipMergeBase,
   List<String>? alertWords,
   List<CustomProfileField>? customProfileFields,
-  EmailAddressVisibility? emailAddressVisibility,
   int? serverPresencePingIntervalSeconds,
   int? serverPresenceOfflineThresholdSeconds,
   int? serverTypingStartedExpiryPeriodMilliseconds,
@@ -1141,11 +1258,16 @@ InitialSnapshot initialSnapshot({
   Map<int, UserStatusChange>? userStatuses,
   UserSettings? userSettings,
   List<UserTopicItem>? userTopics,
+  GroupSettingValue? realmCanDeleteAnyMessageGroup,
+  GroupSettingValue? realmCanDeleteOwnMessageGroup,
+  RealmDeleteOwnMessagePolicy? realmDeleteOwnMessagePolicy,
   RealmWildcardMentionPolicy? realmWildcardMentionPolicy,
   bool? realmMandatoryTopics,
   int? realmWaitingPeriodThreshold,
+  int? realmMessageContentDeleteLimitSeconds,
   bool? realmAllowMessageEditing,
   int? realmMessageContentEditLimitSeconds,
+  bool? realmEnableReadReceipts,
   bool? realmPresenceDisabled,
   Map<String, RealmDefaultExternalAccount>? realmDefaultExternalAccounts,
   int? maxFileUploadSizeMib,
@@ -1163,7 +1285,6 @@ InitialSnapshot initialSnapshot({
     zulipMergeBase: zulipMergeBase ?? recentZulipVersion,
     alertWords: alertWords ?? ['klaxon'],
     customProfileFields: customProfileFields ?? [],
-    emailAddressVisibility: emailAddressVisibility ?? EmailAddressVisibility.everyone,
     serverPresencePingIntervalSeconds: serverPresencePingIntervalSeconds ?? 60,
     serverPresenceOfflineThresholdSeconds: serverPresenceOfflineThresholdSeconds ?? 140,
     serverTypingStartedExpiryPeriodMilliseconds:
@@ -1183,24 +1304,31 @@ InitialSnapshot initialSnapshot({
     streams: streams ?? [], // TODO add streams to default
     userStatuses: userStatuses ?? {},
     userSettings: userSettings ?? UserSettings(
-      twentyFourHourTime: false,
+      twentyFourHourTime: TwentyFourHourTimeMode.twelveHour,
       displayEmojiReactionUsers: true,
       emojiset: Emojiset.google,
       presenceEnabled: true,
     ),
     userTopics: userTopics,
+    // no default; allow `null` to simulate servers without this
+    realmCanDeleteAnyMessageGroup: realmCanDeleteAnyMessageGroup,
+    // no default; allow `null` to simulate servers without this
+    realmCanDeleteOwnMessageGroup: realmCanDeleteOwnMessageGroup,
+    realmDeleteOwnMessagePolicy: realmDeleteOwnMessagePolicy,
     realmWildcardMentionPolicy: realmWildcardMentionPolicy ?? RealmWildcardMentionPolicy.everyone,
     realmMandatoryTopics: realmMandatoryTopics ?? true,
     realmWaitingPeriodThreshold: realmWaitingPeriodThreshold ?? 0,
+    realmMessageContentDeleteLimitSeconds: realmMessageContentDeleteLimitSeconds,
     realmAllowMessageEditing: realmAllowMessageEditing ?? true,
     realmMessageContentEditLimitSeconds: realmMessageContentEditLimitSeconds,
+    realmEnableReadReceipts: realmEnableReadReceipts ?? true,
     realmPresenceDisabled: realmPresenceDisabled ?? false,
     realmDefaultExternalAccounts: realmDefaultExternalAccounts ?? {},
     maxFileUploadSizeMib: maxFileUploadSizeMib ?? 25,
     serverEmojiDataUrl: serverEmojiDataUrl
       ?? realmUrl.replace(path: '/static/emoji.json'),
     realmEmptyTopicDisplayName: realmEmptyTopicDisplayName ?? defaultRealmEmptyTopicDisplayName,
-    realmUsers: realmUsers ?? [],
+    realmUsers: realmUsers ?? [selfUser],
     realmNonActiveUsers: realmNonActiveUsers ?? [],
     crossRealmBots: crossRealmBots ?? [],
   );
@@ -1209,10 +1337,13 @@ const _initialSnapshot = initialSnapshot;
 
 PerAccountStore store({
   GlobalStore? globalStore,
+  User? selfUser,
   Account? account,
   InitialSnapshot? initialSnapshot,
 }) {
-  final effectiveAccount = account ?? selfAccount;
+  assert(!(account != null && selfUser != null));
+  final effectiveAccount = account
+    ?? (selfUser != null ? _account(user: selfUser) : selfAccount);
   return PerAccountStore.fromInitialSnapshot(
     globalStore: globalStore ?? _globalStore(accounts: [effectiveAccount]),
     accountId: effectiveAccount.id,

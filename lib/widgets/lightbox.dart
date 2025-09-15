@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 import 'package:video_player/video_player.dart';
 
 import '../api/core.dart';
@@ -12,8 +11,10 @@ import '../model/binding.dart';
 import 'actions.dart';
 import 'content.dart';
 import 'dialog.dart';
+import 'message_list.dart';
 import 'page.dart';
 import 'store.dart';
+import 'user.dart';
 
 /// Identifies which [LightboxHero]s should match up with each other
 /// to produce a hero animation.
@@ -166,6 +167,7 @@ class _LightboxPageLayoutState extends State<_LightboxPageLayout> {
 
   @override
   Widget build(BuildContext context) {
+    final zulipLocalizations = ZulipLocalizations.of(context);
     final store = PerAccountStoreWidget.of(context);
     final themeData = Theme.of(context);
 
@@ -175,11 +177,11 @@ class _LightboxPageLayoutState extends State<_LightboxPageLayout> {
 
     PreferredSizeWidget? appBar;
     if (_headerFooterVisible) {
-      // TODO(#45): Format with e.g. "Yesterday at 4:47 PM"
-      final timestampText = DateFormat
-        .yMMMd(/* TODO(#278): Pass selected language here, I think? */)
-        .add_Hms()
-        .format(DateTime.fromMillisecondsSinceEpoch(widget.message.timestamp * 1000));
+      final timestampText = MessageTimestampStyle.lightbox
+        .format(widget.message.timestamp,
+          now: DateTime.now(),
+          twentyFourHourTimeMode: store.userSettings.twentyFourHourTime,
+          zulipLocalizations: zulipLocalizations);
 
       // We use plain [AppBar] instead of [ZulipAppBar], even though this page
       // has a [PerAccountStore], because:
@@ -346,6 +348,7 @@ class _ImageLightboxPageState extends State<_ImageLightboxPage> {
       buildBottomAppBar: _buildBottomAppBar,
       child: SizedBox.expand(
         child: InteractiveViewer(
+          maxScale: 10, // TODO adjust based on device and image size; see #1091
           child: SafeArea(
             child: LightboxHero(
               messageImageContext: widget.messageImageContext,

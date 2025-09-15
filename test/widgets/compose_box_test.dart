@@ -6,6 +6,7 @@ import 'package:checks/checks.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_checks/flutter_checks.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -37,7 +38,7 @@ import '../model/store_checks.dart';
 import '../model/test_store.dart';
 import '../model/typing_status_test.dart';
 import '../stdlib_checks.dart';
-import 'compose_box_checks.dart';
+import 'checks.dart';
 import 'dialog_checks.dart';
 import 'test_app.dart';
 
@@ -395,7 +396,7 @@ void main() {
         await prepareWithContent(tester,
           makeStringWithCodePoints(kMaxMessageLengthCodePoints));
         await tapSendButton(tester);
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
       });
 
       testWidgets('code points not counted unnecessarily', (tester) async {
@@ -434,7 +435,7 @@ void main() {
         await prepareWithTopic(tester,
           makeStringWithCodePoints(kMaxTopicLengthCodePoints));
         await tapSendButton(tester);
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
       });
 
       testWidgets('code points not counted unnecessarily', (tester) async {
@@ -761,7 +762,7 @@ void main() {
       await checkStartTyping(tester, narrow);
 
       connection.prepare(json: {});
-      await tester.pump(store.typingNotifier.typingStoppedWaitPeriod);
+      await tester.pump(store.serverTypingStoppedWaitPeriod);
       checkTypingRequest(TypingOp.stop, narrow);
     });
 
@@ -773,7 +774,7 @@ void main() {
       await checkStartTyping(tester, narrow);
 
       connection.prepare(json: {});
-      await tester.pump(store.typingNotifier.typingStoppedWaitPeriod);
+      await tester.pump(store.serverTypingStoppedWaitPeriod);
       checkTypingRequest(TypingOp.stop, narrow);
     });
 
@@ -786,7 +787,7 @@ void main() {
       await checkStartTyping(tester, destinationNarrow);
 
       connection.prepare(json: {});
-      await tester.pump(store.typingNotifier.typingStoppedWaitPeriod);
+      await tester.pump(store.serverTypingStoppedWaitPeriod);
       checkTypingRequest(TypingOp.stop, destinationNarrow);
     });
 
@@ -866,7 +867,7 @@ void main() {
       await checkStartTyping(tester, narrow);
 
       connection.prepare(json: {});
-      await tester.pump(store.typingNotifier.typingStoppedWaitPeriod);
+      await tester.pump(store.serverTypingStoppedWaitPeriod);
       checkTypingRequest(TypingOp.stop, narrow);
 
       connection.prepare(json: {});
@@ -876,7 +877,7 @@ void main() {
 
       // Ensures that a "typing stopped" notice is sent when the test ends.
       connection.prepare(json: {});
-      await tester.pump(store.typingNotifier.typingStoppedWaitPeriod);
+      await tester.pump(store.serverTypingStoppedWaitPeriod);
       checkTypingRequest(TypingOp.stop, narrow);
     });
 
@@ -938,7 +939,7 @@ void main() {
       await setupAndTapSend(tester, prepareResponse: (int messageId) {
         connection.prepare(json: SendMessageResult(id: messageId).toJson());
       });
-      checkNoErrorDialog(tester);
+      checkNoDialog(tester);
     });
 
     testWidgets('ZulipApiException', (tester) async {
@@ -1045,20 +1046,24 @@ void main() {
         .isA<Icon>().color.isNotNull().isSameColorAs(expectedIconColor);
     }
 
+    Future<void> prepare(WidgetTester tester) async {
+      TypingNotifier.debugEnable = false;
+      addTearDown(TypingNotifier.debugReset);
+
+      final channel = eg.stream();
+      final narrow = ChannelNarrow(channel.streamId);
+      await prepareComposeBox(tester, narrow: narrow, streams: [channel]);
+
+      // (When we check that the send button looks disabled, it should be because
+      // the file is uploading, not a pre-existing reason.)
+      await enterTopic(tester, narrow: narrow, topic: 'some topic');
+      await enterContent(tester, 'see image: ');
+      await tester.pump();
+    }
+
     group('attach from media library', () {
       testWidgets('success', (tester) async {
-        TypingNotifier.debugEnable = false;
-        addTearDown(TypingNotifier.debugReset);
-
-        final channel = eg.stream();
-        final narrow = ChannelNarrow(channel.streamId);
-        await prepareComposeBox(tester, narrow: narrow, streams: [channel]);
-
-        // (When we check that the send button looks disabled, it should be because
-        // the file is uploading, not a pre-existing reason.)
-        await enterTopic(tester, narrow: narrow, topic: 'some topic');
-        controller!.content.value = const TextEditingValue(text: 'see image: ');
-        await tester.pump();
+        await prepare(tester);
         checkAppearsLoading(tester, false);
 
         testBinding.pickFilesResult = FilePickerResult([PlatformFile(
@@ -1070,7 +1075,7 @@ void main() {
           size: 12345,
         )]);
         connection.prepare(delay: const Duration(seconds: 1), json:
-          UploadFileResult(uri: '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/image.jpg').toJson());
+          UploadFileResult(url: '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/image.jpg').toJson());
 
         await tester.tap(find.byIcon(ZulipIcons.image));
         await tester.pump();
@@ -1078,7 +1083,7 @@ void main() {
         check(call.allowMultiple).equals(true);
         check(call.type).equals(FileType.media);
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
 
         check(controller!.content.text)
           .equals('see image: [Uploading image.jpg…]()\n\n');
@@ -1106,18 +1111,7 @@ void main() {
 
     group('attach from camera', () {
       testWidgets('success', (tester) async {
-        TypingNotifier.debugEnable = false;
-        addTearDown(TypingNotifier.debugReset);
-
-        final channel = eg.stream();
-        final narrow = ChannelNarrow(channel.streamId);
-        await prepareComposeBox(tester, narrow: narrow, streams: [channel]);
-
-        // (When we check that the send button looks disabled, it should be because
-        // the file is uploading, not a pre-existing reason.)
-        await enterTopic(tester, narrow: narrow, topic: 'some topic');
-        controller!.content.value = const TextEditingValue(text: 'see image: ');
-        await tester.pump();
+        await prepare(tester);
         checkAppearsLoading(tester, false);
 
         testBinding.pickImageResult = XFile.fromData(
@@ -1129,7 +1123,7 @@ void main() {
           path: '/private/var/mobile/Containers/Data/Application/foo/tmp/image.jpg',
         );
         connection.prepare(delay: const Duration(seconds: 1), json:
-          UploadFileResult(uri: '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/image.jpg').toJson());
+          UploadFileResult(url: '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/image.jpg').toJson());
 
         await tester.tap(find.byIcon(ZulipIcons.camera));
         await tester.pump();
@@ -1137,7 +1131,7 @@ void main() {
         check(call.source).equals(ImageSource.camera);
         check(call.requestFullMetadata).equals(false);
 
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
 
         check(controller!.content.text)
           .equals('see image: [Uploading image.jpg…]()\n\n');
@@ -1168,6 +1162,134 @@ void main() {
     // target platform the test is simulating.
     // TODO(upstream): unskip after fix to https://github.com/flutter/flutter/issues/161073
     skip: Platform.isWindows);
+
+    testWidgets('use verbatim URL string from server, not re-encoded', (tester) async {
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/1709
+      TypingNotifier.debugEnable = false;
+      addTearDown(TypingNotifier.debugReset);
+
+      final channel = eg.stream();
+      final narrow = eg.topicNarrow(channel.streamId, 'a topic');
+      await prepareComposeBox(tester, narrow: narrow, streams: [channel]);
+
+      testBinding.pickFilesResult = FilePickerResult([PlatformFile(
+        readStream: Stream.fromIterable(['asdf'.codeUnits]),
+        path: '/some/path/한국어 파일.txt',
+        name: '한국어 파일.txt',
+        size: 4,
+      )]);
+      connection.prepare(json: UploadFileResult(url:
+        '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/한국어 파일.txt').toJson());
+      await tester.tap(find.byIcon(ZulipIcons.image));
+      await tester.pump();
+      check(controller!.content.text)
+        .equals('[Uploading 한국어 파일.txt…]()\n\n');
+
+      await tester.pump(Duration.zero);
+      check(controller!.content.text)
+        .equals('[한국어 파일.txt]('
+          '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/한국어 파일.txt)\n\n');
+    });
+
+    group('attach from keyboard', () {
+      // This is adapted from:
+      //   https://github.com/flutter/flutter/blob/0ffc4ce00/packages/flutter/test/widgets/editable_text_test.dart#L724-L740
+      Future<void> insertContentFromKeyboard(WidgetTester tester, {
+        required List<int>? data,
+        required String attachedFileUrl,
+        required String mimeType,
+      }) async {
+        await tester.showKeyboard(contentInputFinder);
+        // This invokes [EditableText.performAction] on the content [TextField],
+        // which did not expose an API for testing.
+        // TODO(upstream): support a better API for testing this
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          SystemChannels.textInput.name,
+          SystemChannels.textInput.codec.encodeMethodCall(
+            MethodCall('TextInputClient.performAction', <dynamic>[
+              -1,
+              'TextInputAction.commitContent',
+              // This fakes data originally provided by the Flutter engine:
+              //   https://github.com/flutter/flutter/blob/0ffc4ce00/engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/InputConnectionAdaptor.java#L497-L548
+              {
+                "mimeType": mimeType,
+                "data": data,
+                "uri": attachedFileUrl,
+              },
+            ])),
+          (ByteData? data) {});
+      }
+
+      testWidgets('success', (tester) async {
+        const fileContent = [1, 0, 1, 0, 0];
+        await prepare(tester);
+        const uploadUrl = '/user_uploads/1/4e/m2A3MSqFnWRLUf9SaPzQ0Up_/test.gif';
+        connection.prepare(json: UploadFileResult(url: uploadUrl).toJson());
+        await insertContentFromKeyboard(tester,
+          data: fileContent,
+          attachedFileUrl:
+            'content://com.zulip.android.zulipboard.provider'
+            '/root/com.zulip.android.zulipboard/candidate_temp/test.gif',
+          mimeType: 'image/gif');
+
+        await tester.pump();
+        check(controller!.content.text)
+          .equals('see image: [Uploading test.gif…]()\n\n');
+        // (the request is checked more thoroughly in API tests)
+        check(connection.lastRequest!).isA<http.MultipartRequest>()
+          ..method.equals('POST')
+          ..files.single.which((it) => it
+            ..field.equals('file')
+            ..length.equals(fileContent.length)
+            ..filename.equals('test.gif')
+            ..contentType.asString.equals('image/gif')
+            ..has<Future<List<int>>>((f) => f.finalize().toBytes(), 'contents')
+              .completes((it) => it.deepEquals(fileContent))
+          );
+        checkAppearsLoading(tester, true);
+
+        await tester.pump(Duration.zero);
+        check(controller!.content.text)
+          .equals('see image: [test.gif]($uploadUrl)\n\n');
+        checkAppearsLoading(tester, false);
+      });
+
+      testWidgets('data is null', (tester) async {
+        await prepare(tester);
+        await insertContentFromKeyboard(tester,
+          data: null,
+          attachedFileUrl:
+            'content://com.zulip.android.zulipboard.provider'
+            '/root/com.zulip.android.zulipboard/candidate_temp/test.gif',
+          mimeType: 'image/jpeg');
+
+        await tester.pump();
+        check(controller!.content.text).equals('see image: ');
+        check(connection.takeRequests()).isEmpty();
+        checkErrorDialog(tester,
+          expectedTitle: 'Content not inserted',
+          expectedMessage: 'The file to be inserted is empty or cannot be accessed.');
+        checkAppearsLoading(tester, false);
+      });
+
+      testWidgets('data is empty', (tester) async {
+        await prepare(tester);
+        await insertContentFromKeyboard(tester,
+          data: [],
+          attachedFileUrl:
+            'content://com.zulip.android.zulipboard.provider'
+            '/root/com.zulip.android.zulipboard/candidate_temp/test.gif',
+          mimeType: 'image/jpeg');
+
+        await tester.pump();
+        check(controller!.content.text).equals('see image: ');
+        check(connection.takeRequests()).isEmpty();
+        checkErrorDialog(tester,
+          expectedTitle: 'Content not inserted',
+          expectedMessage: 'The file to be inserted is empty or cannot be accessed.');
+        checkAppearsLoading(tester, false);
+      });
+    });
   });
 
   group('error banner', () {
@@ -1720,6 +1842,12 @@ void main() {
       await tester.pump(); // message list updates
     }
 
+    Future<void> takeErrorDialogAndPump(WidgetTester tester) async {
+      final errorDialog = checkErrorDialog(tester, expectedTitle: 'Message not saved');
+      await tester.tap(find.byWidget(errorDialog));
+      await tester.pump();
+    }
+
     /// Check that the compose box is in the "Preparing…" state,
     /// awaiting the fetch-raw-content request.
     Future<void> checkAwaitingRawMessageContent(WidgetTester tester) async {
@@ -1742,6 +1870,7 @@ void main() {
       await tester.tap(
         find.widgetWithText(ZulipWebUiKitButton, 'Save'), warnIfMissed: false);
       await tester.pump(Duration.zero);
+      checkNoDialog(tester);
       check(connection.lastRequest).equals(lastRequest);
     }
 
@@ -1760,6 +1889,7 @@ void main() {
       connection.prepare(apiException: eg.apiBadRequest());
       await tester.tap(find.widgetWithText(ZulipWebUiKitButton, 'Save'));
       await tester.pump(Duration.zero);
+      await takeErrorDialogAndPump(tester);
       await tester.tap(find.text('EDIT NOT SAVED'));
       await tester.pump();
       connection.takeRequests();
@@ -1833,10 +1963,10 @@ void main() {
         testBinding.pickFilesResult = FilePickerResult([
           PlatformFile(name: 'file.jpg', size: 1000, readStream: Stream.fromIterable(['asdf'.codeUnits]))]);
         connection.prepare(json:
-          UploadFileResult(uri: '/path/file.jpg').toJson());
+          UploadFileResult(url: '/path/file.jpg').toJson());
         await tester.tap(find.byIcon(ZulipIcons.attach_file), warnIfMissed: false);
         await tester.pump(Duration.zero);
-        checkNoErrorDialog(tester);
+        checkNoDialog(tester);
         check(testBinding.takePickFilesCalls()).length.equals(1);
         connection.takeRequests(); // upload request
 
@@ -1938,6 +2068,7 @@ void main() {
         await tester.tap(find.widgetWithText(ZulipWebUiKitButton, 'Save'));
         connection.takeRequests();
         await tester.pump(Duration.zero);
+        await takeErrorDialogAndPump(tester);
         checkNotInEditingMode(tester, narrow: narrow);
         check(find.text('EDIT NOT SAVED')).findsOne();
 

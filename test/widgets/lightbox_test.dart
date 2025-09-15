@@ -17,6 +17,7 @@ import 'package:zulip/widgets/app.dart';
 import 'package:zulip/widgets/content.dart';
 import 'package:zulip/widgets/lightbox.dart';
 import 'package:zulip/widgets/message_list.dart';
+import 'package:zulip/widgets/user.dart';
 
 import '../api/fake_api.dart';
 import '../example_data.dart' as eg;
@@ -274,6 +275,7 @@ void main() {
     });
 
     testWidgets('no hero animation occurs between different message list pages for same image', (tester) async {
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/930
       Rect getElementRect(Element element) =>
         tester.getRect(find.byElementPredicate((e) => e == element));
 
@@ -309,7 +311,13 @@ void main() {
       }
 
       debugNetworkImageHttpClientProvider = null;
-    });
+    }, skip: true, // TODO get this no-hero test to work again with new page transitions;
+      //   see https://github.com/flutter/flutter/pull/165832#issuecomment-3111641360 .
+      //   Perhaps specify the old default, of ZoomPageTransitionsBuilder?
+      //   Or make getElementRect work relative to the enclosing page,
+      //   rather than the whole screen, so that the test becomes robust to
+      //   the whole pages moving around.
+    );
   });
 
   group('_ImageLightboxPage', () {
@@ -358,6 +366,16 @@ void main() {
       debugNetworkImageHttpClientProvider = null;
     });
 
+    testWidgets('image can zoom up to 10x', (tester) async {
+      prepareBoringImageHttpClient();
+      await setupPage(tester, thumbnailUrl: null);
+
+      check(tester.widget<InteractiveViewer>(find.byType(InteractiveViewer)).maxScale)
+        .equals(10);
+
+      debugNetworkImageHttpClientProvider = null;
+    });
+
     void checkAppBarNameAndDate(WidgetTester tester, String expectedName, String expectedDate) {
       final labelTextWidget = tester.widget<RichText>(
         find.descendant(of: find.byType(AppBar).last,
@@ -374,12 +392,12 @@ void main() {
       await setupPage(tester, message: message, thumbnailUrl: null, users: [sender]);
       check(store.getUser(sender.userId)).isNotNull();
 
-      checkAppBarNameAndDate(tester, 'Old name', 'Jul 23, 2024 23:12:24');
+      checkAppBarNameAndDate(tester, 'Old name', 'Jul 23, 2024 11:12:24 PM');
 
       await store.handleEvent(RealmUserUpdateEvent(id: 1,
         userId: sender.userId, fullName: 'New name'));
       await tester.pump();
-      checkAppBarNameAndDate(tester, 'New name', 'Jul 23, 2024 23:12:24');
+      checkAppBarNameAndDate(tester, 'New name', 'Jul 23, 2024 11:12:24 PM');
 
       debugNetworkImageHttpClientProvider = null;
     });
@@ -392,7 +410,7 @@ void main() {
       await setupPage(tester, message: message, thumbnailUrl: null, users: []);
       check(store.getUser(sender.userId)).isNull();
 
-      checkAppBarNameAndDate(tester, 'Sender name', 'Jul 23, 2024 23:12:24');
+      checkAppBarNameAndDate(tester, 'Sender name', 'Jul 23, 2024 11:12:24 PM');
 
       debugNetworkImageHttpClientProvider = null;
     });

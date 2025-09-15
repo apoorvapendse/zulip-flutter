@@ -102,7 +102,6 @@ void main() {
       'is_owner': false,
       'is_admin': false,
       'is_guest': false,
-      'is_billing_admin': false,
       'is_bot': false,
       'role': 400,
       'timezone': 'UTC',
@@ -128,7 +127,6 @@ void main() {
 
     test('is_system_bot', () {
       check(mkUser({}).isSystemBot).isFalse();
-      check(mkUser({'is_cross_realm_bot': true}).isSystemBot).isTrue();
       check(mkUser({'is_system_bot': true}).isSystemBot).isTrue();
     });
   });
@@ -226,31 +224,6 @@ void main() {
       doCheck(eg.t('✔ Some Topic'), eg.t('sOME tOPIC'),   false);
 
       doCheck(eg.t('✔ a'),          eg.t('✔ b'),          false);
-    });
-
-    test('processLikeServer', () {
-      final emptyTopicDisplayName = eg.defaultRealmEmptyTopicDisplayName;
-      void doCheck(TopicName topic, TopicName expected, int zulipFeatureLevel) {
-        check(topic.processLikeServer(
-          zulipFeatureLevel: zulipFeatureLevel,
-          realmEmptyTopicDisplayName: emptyTopicDisplayName),
-        ).equals(expected);
-      }
-
-      check(() => eg.t('').processLikeServer(
-        zulipFeatureLevel: 333,
-        realmEmptyTopicDisplayName: emptyTopicDisplayName),
-      ).throws<void>();
-      doCheck(eg.t('(no topic)'),          eg.t('(no topic)'),          333);
-      doCheck(eg.t(emptyTopicDisplayName), eg.t(emptyTopicDisplayName), 333);
-      doCheck(eg.t('other topic'),         eg.t('other topic'),         333);
-
-      doCheck(eg.t(''),                    eg.t(''),                    334);
-      doCheck(eg.t('(no topic)'),          eg.t('(no topic)'),          334);
-      doCheck(eg.t(emptyTopicDisplayName), eg.t(''),                    334);
-      doCheck(eg.t('other topic'),         eg.t('other topic'),         334);
-
-      doCheck(eg.t('(no topic)'),          eg.t(''),                    370);
     });
   });
 
@@ -359,16 +332,6 @@ void main() {
       test('Content change only -> edited', () {
         checkEditState(MessageEditState.edited,
           [{'prev_content': 'old_content'}]);
-      });
-
-      test("'prev_topic' present without the 'topic' field -> moved", () {
-        checkEditState(MessageEditState.moved,
-          [{'prev_topic': 'old_topic'}]);
-      });
-
-      test("'prev_subject' present from a pre-5.0 server -> moved", () {
-        checkEditState(MessageEditState.moved,
-          [{'prev_subject': 'old_topic'}]);
       });
     });
 

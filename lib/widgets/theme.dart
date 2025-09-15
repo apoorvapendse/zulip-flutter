@@ -59,6 +59,13 @@ ThemeData zulipThemeData(BuildContext context) {
     brightness: brightness,
     typography: zulipTypography(context),
     extensions: themeExtensions,
+
+    // Use "standard" visual density (the default for mobile platforms)
+    // on all platforms.  That helps the desktop builds of the app be faithful
+    // previews of how the app behaves on mobile -- which is the only purpose
+    // we use the desktop builds for.
+    visualDensity: VisualDensity.standard,
+
     iconButtonTheme: IconButtonThemeData(style: IconButton.styleFrom(
       foregroundColor: designVariables.icon,
     )),
@@ -171,6 +178,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     labelEdited: const HSLColor.fromAHSL(0.35, 0, 0, 0).toColor(),
     labelMenuButton: const Color(0xff222222),
     labelSearchPrompt: const Color(0xff000000).withValues(alpha: 0.5),
+    labelTime: const Color(0x00000000).withValues(alpha: 0.49),
+    link: const Color(0xff066bd0), // from "Zulip Web UI kit"
     listMenuItemBg: const Color(0xffcbcdd6),
     listMenuItemIcon: const Color(0xff9194a3),
     listMenuItemText: const Color(0xff2d303c),
@@ -213,6 +222,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     subscriptionListHeaderLine: const HSLColor.fromAHSL(0.2, 240, 0.1, 0.5).toColor(),
     subscriptionListHeaderText: const HSLColor.fromAHSL(1.0, 240, 0.1, 0.5).toColor(),
     unreadCountBadgeTextForChannel: Colors.black.withValues(alpha: 0.9),
+    userStatusText: const Color(0xff808080),
   );
 
   static final dark = DesignVariables._(
@@ -259,6 +269,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     labelEdited: const HSLColor.fromAHSL(0.35, 0, 0, 1).toColor(),
     labelMenuButton: const Color(0xffffffff).withValues(alpha: 0.85),
     labelSearchPrompt: const Color(0xffffffff).withValues(alpha: 0.5),
+    labelTime: const Color(0xffffffff).withValues(alpha: 0.50),
+    link: const Color(0xff00aaff), // from "Zulip Web UI kit"
     listMenuItemBg: const Color(0xff2d303c),
     listMenuItemIcon: const Color(0xff767988),
     listMenuItemText: const Color(0xffcbcdd6),
@@ -309,6 +321,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     // TODO(design-dark) need proper dark-theme color (this is ad hoc)
     subscriptionListHeaderText: const HSLColor.fromAHSL(1.0, 240, 0.1, 0.75).toColor(),
     unreadCountBadgeTextForChannel: Colors.white.withValues(alpha: 0.9),
+    // TODO(design-dark) unchanged in dark theme?
+    userStatusText: const Color(0xff808080),
   );
 
   DesignVariables._({
@@ -355,6 +369,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     required this.labelEdited,
     required this.labelMenuButton,
     required this.labelSearchPrompt,
+    required this.labelTime,
+    required this.link,
     required this.listMenuItemBg,
     required this.listMenuItemIcon,
     required this.listMenuItemText,
@@ -388,6 +404,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     required this.subscriptionListHeaderLine,
     required this.subscriptionListHeaderText,
     required this.unreadCountBadgeTextForChannel,
+    required this.userStatusText,
   });
 
   /// The [DesignVariables] from the context's active theme.
@@ -443,6 +460,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
   final Color labelEdited;
   final Color labelMenuButton;
   final Color labelSearchPrompt;
+  final Color labelTime;
+  final Color link;
   final Color listMenuItemBg;
   final Color listMenuItemIcon;
   final Color listMenuItemText;
@@ -480,6 +499,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
   final Color subscriptionListHeaderLine;
   final Color subscriptionListHeaderText;
   final Color unreadCountBadgeTextForChannel;
+  final Color userStatusText; // In Figma, but unnamed.
 
   @override
   DesignVariables copyWith({
@@ -526,6 +546,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     Color? labelEdited,
     Color? labelMenuButton,
     Color? labelSearchPrompt,
+    Color? labelTime,
+    Color? link,
     Color? listMenuItemBg,
     Color? listMenuItemIcon,
     Color? listMenuItemText,
@@ -559,6 +581,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
     Color? subscriptionListHeaderLine,
     Color? subscriptionListHeaderText,
     Color? unreadCountBadgeTextForChannel,
+    Color? userStatusText,
   }) {
     return DesignVariables._(
       background: background ?? this.background,
@@ -604,6 +627,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
       labelEdited: labelEdited ?? this.labelEdited,
       labelMenuButton: labelMenuButton ?? this.labelMenuButton,
       labelSearchPrompt: labelSearchPrompt ?? this.labelSearchPrompt,
+      labelTime: labelTime ?? this.labelTime,
+      link: link ?? this.link,
       listMenuItemBg: listMenuItemBg ?? this.listMenuItemBg,
       listMenuItemIcon: listMenuItemIcon ?? this.listMenuItemIcon,
       listMenuItemText: listMenuItemText ?? this.listMenuItemText,
@@ -637,6 +662,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
       subscriptionListHeaderLine: subscriptionListHeaderLine ?? this.subscriptionListHeaderLine,
       subscriptionListHeaderText: subscriptionListHeaderText ?? this.subscriptionListHeaderText,
       unreadCountBadgeTextForChannel: unreadCountBadgeTextForChannel ?? this.unreadCountBadgeTextForChannel,
+      userStatusText: userStatusText ?? this.userStatusText,
     );
   }
 
@@ -689,6 +715,8 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
       labelEdited: Color.lerp(labelEdited, other.labelEdited, t)!,
       labelMenuButton: Color.lerp(labelMenuButton, other.labelMenuButton, t)!,
       labelSearchPrompt: Color.lerp(labelSearchPrompt, other.labelSearchPrompt, t)!,
+      labelTime: Color.lerp(labelTime, other.labelTime, t)!,
+      link: Color.lerp(link, other.link, t)!,
       listMenuItemBg: Color.lerp(listMenuItemBg, other.listMenuItemBg, t)!,
       listMenuItemIcon: Color.lerp(listMenuItemIcon, other.listMenuItemIcon, t)!,
       listMenuItemText: Color.lerp(listMenuItemText, other.listMenuItemText, t)!,
@@ -722,6 +750,7 @@ class DesignVariables extends ThemeExtension<DesignVariables> {
       subscriptionListHeaderLine: Color.lerp(subscriptionListHeaderLine, other.subscriptionListHeaderLine, t)!,
       subscriptionListHeaderText: Color.lerp(subscriptionListHeaderText, other.subscriptionListHeaderText, t)!,
       unreadCountBadgeTextForChannel: Color.lerp(unreadCountBadgeTextForChannel, other.unreadCountBadgeTextForChannel, t)!,
+      userStatusText: Color.lerp(userStatusText, other.userStatusText, t)!,
     );
   }
 }

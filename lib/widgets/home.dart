@@ -10,7 +10,6 @@ import 'app.dart';
 import 'app_bar.dart';
 import 'button.dart';
 import 'color.dart';
-import 'content.dart';
 import 'icons.dart';
 import 'inbox.dart';
 import 'inset_shadow.dart';
@@ -23,6 +22,7 @@ import 'store.dart';
 import 'subscription_list.dart';
 import 'text.dart';
 import 'theme.dart';
+import 'user.dart';
 
 enum _HomePageTab {
   inbox,
@@ -324,7 +324,8 @@ void _showMainMenu(BuildContext context, {
                 child: AnimatedScaleOnTap(
                   scaleEnd: 0.95,
                   duration: Duration(milliseconds: 100),
-                  child: ActionSheetCancelButton())),
+                  child: BottomSheetDismissButton(
+                    style: BottomSheetDismissButtonStyle.close))),
             ])));
     });
 }

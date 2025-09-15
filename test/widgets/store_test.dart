@@ -24,10 +24,10 @@ class MyWidgetWithMixin extends StatefulWidget {
   const MyWidgetWithMixin({super.key});
 
   @override
-  State<MyWidgetWithMixin> createState() => MyWidgetWithMixinState();
+  State<MyWidgetWithMixin> createState() => _MyWidgetWithMixinState();
 }
 
-class MyWidgetWithMixinState extends State<MyWidgetWithMixin> with PerAccountStoreAwareStateMixin<MyWidgetWithMixin> {
+class _MyWidgetWithMixinState extends State<MyWidgetWithMixin> with PerAccountStoreAwareStateMixin<MyWidgetWithMixin> {
   int anyDepChangeCounter = 0;
   int storeChangeCounter = 0;
 
@@ -50,7 +50,7 @@ class MyWidgetWithMixinState extends State<MyWidgetWithMixin> with PerAccountSto
   }
 }
 
-extension MyWidgetWithMixinStateChecks on Subject<MyWidgetWithMixinState> {
+extension _MyWidgetWithMixinStateChecks on Subject<_MyWidgetWithMixinState> {
   Subject<int> get anyDepChangeCounter => has((w) => w.anyDepChangeCounter, 'anyDepChangeCounter');
   Subject<int> get storeChangeCounter => has((w) => w.storeChangeCounter, 'storeChangeCounter');
 }
@@ -281,10 +281,14 @@ void main() {
 
     addTearDown(testBinding.reset);
 
-    final account1 = eg.account(id: 1, user: eg.user());
-    final account2 = eg.account(id: 2, user: eg.user());
-    await testBinding.globalStore.add(account1, eg.initialSnapshot());
-    await testBinding.globalStore.add(account2, eg.initialSnapshot());
+    final user1 = eg.user();
+    final user2 = eg.user();
+    final account1 = eg.account(id: 1, user: user1);
+    final account2 = eg.account(id: 2, user: user2);
+    await testBinding.globalStore.add(account1, eg.initialSnapshot(
+      realmUsers: [user1]));
+    await testBinding.globalStore.add(account2, eg.initialSnapshot(
+      realmUsers: [user2]));
 
     final testNavObserver = TestNavigatorObserver();
     await tester.pumpWidget(ZulipApp(navigatorObservers: [testNavObserver]));
@@ -334,7 +338,7 @@ void main() {
   });
 
   testWidgets('PerAccountStoreAwareStateMixin', (tester) async {
-    final widgetWithMixinKey = GlobalKey<MyWidgetWithMixinState>();
+    final widgetWithMixinKey = GlobalKey<_MyWidgetWithMixinState>();
     final accountId = eg.selfAccount.id;
 
     await testBinding.globalStore.add(eg.selfAccount, eg.initialSnapshot());
@@ -374,7 +378,8 @@ void main() {
     //   production code, where we could reasonably add an assert against it.
     //   If forced, we could let this test code proceed despite such an assert…)
     // hack; the snapshot probably corresponds to selfAccount, not otherAccount.
-    await testBinding.globalStore.add(eg.otherAccount, eg.initialSnapshot());
+    await testBinding.globalStore.add(eg.otherAccount, eg.initialSnapshot(
+      realmUsers: [eg.otherUser]));
     await pumpWithParams(light: false, accountId: eg.otherAccount.id);
     // Nudge PerAccountStoreWidget to send its updated store to MyWidgetWithMixin.
     //

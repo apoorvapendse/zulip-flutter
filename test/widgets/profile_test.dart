@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:checks/checks.dart';
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_checks/flutter_checks.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:zulip/api/model/events.dart';
 import 'package:zulip/api/model/initial_snapshot.dart';
 import 'package:zulip/api/model/model.dart';
+import 'package:zulip/basic.dart';
+import 'package:zulip/model/localizations.dart';
 import 'package:zulip/model/narrow.dart';
 import 'package:zulip/model/store.dart';
 import 'package:zulip/widgets/button.dart';
@@ -18,6 +21,7 @@ import 'package:zulip/widgets/message_list.dart';
 import 'package:zulip/widgets/page.dart';
 import 'package:zulip/widgets/remote_settings.dart';
 import 'package:zulip/widgets/profile.dart';
+import 'package:zulip/widgets/user.dart';
 
 import '../api/fake_api.dart';
 import '../example_data.dart' as eg;
@@ -26,9 +30,8 @@ import '../model/test_store.dart';
 import '../stdlib_checks.dart';
 import '../test_images.dart';
 import '../test_navigation.dart';
-import 'message_list_checks.dart';
-import 'page_checks.dart';
-import 'profile_page_checks.dart';
+import 'checks.dart';
+import 'finders.dart';
 import 'test_app.dart';
 
 late PerAccountStore store;
@@ -70,24 +73,6 @@ Future<void> setupPage(WidgetTester tester, {
   await tester.pumpAndSettle();
 }
 
-CustomProfileField mkCustomProfileField(
-  int id,
-  CustomProfileFieldType type, {
-  int? order,
-  bool? displayInProfileSummary,
-  String? fieldData,
-}) {
-  return CustomProfileField(
-    id: id,
-    type: type,
-    order: order ?? id,
-    name: 'field$id',
-    hint: 'hint$id',
-    fieldData: fieldData ?? '',
-    displayInProfileSummary: displayInProfileSummary ?? true,
-  );
-}
-
 void main() {
   TestZulipBinding.ensureInitialized();
 
@@ -99,6 +84,7 @@ void main() {
 
     check(because: 'find user avatar', find.byType(Avatar).evaluate()).length.equals(1);
     check(because: 'find user name', find.text('test user').evaluate()).isNotEmpty();
+    // Tests for user status are in their own test group.
     check(because: 'find user delivery email', find.text('testuser@example.com').evaluate()).isNotEmpty();
   });
 
@@ -134,6 +120,87 @@ void main() {
     check(find.text(longString).evaluate()).isNotEmpty();
   });
 
+  group('_LastActiveTime', () {
+    Future<void> update(WidgetTester tester, User user, {
+      required int activeSeconds,
+      int? idleSeconds,
+    }) async {
+      idleSeconds ??= activeSeconds + 3600;
+      final now = clock.now().millisecondsSinceEpoch ~/ 1000;
+      final presence = PerUserPresence(
+        activeTimestamp: now - activeSeconds,
+        idleTimestamp: now - idleSeconds,
+      );
+      store.presence.debugHandlePresenceResponse({user.userId: presence});
+      await tester.pump();
+    }
+
+    testWidgets('active, idle, never', (tester) async {
+      final user = eg.user();
+      await setupPage(tester, users: [user], pageUserId: user.userId);
+      check(find.text('Not active in the last year')).findsOne();
+
+      await update(tester, user, activeSeconds: 3600, idleSeconds: 30);
+      check(find.text('Idle')).findsOne();
+
+      await update(tester, user, activeSeconds: 30);
+      check(find.text('Active now')).findsOne();
+    });
+
+    testWidgets('various ages', (tester) async {
+      final user = eg.user();
+      await setupPage(tester, users: [user], pageUserId: user.userId);
+
+      // These tests could be more detailed in making sure the behavior is
+      // exactly the way it currently is.  But save that for a future where
+      // we've made a pass over the logic to ensure we're happy with that spec.
+
+      await update(tester, user, activeSeconds: 10 * 60);
+      check(find.text('Active 10 minutes ago')).findsOne();
+
+      await update(tester, user, activeSeconds: 61 * 60);
+      check(find.text('Active 1 hour ago')).findsOne();
+
+      await update(tester, user, activeSeconds: 20 * 60 * 60);
+      check(find.text('Active 20 hours ago')).findsOne();
+
+      await update(tester, user, activeSeconds: 24 * 60 * 60);
+      check(find.text('Active yesterday')).findsOne();
+
+      await update(tester, user, activeSeconds: 2 * 24 * 60 * 60);
+      check(find.text('Active 2 days ago')).findsOne();
+
+      await update(tester, user, activeSeconds: 80 * 24 * 60 * 60);
+      check(find.text('Active 80 days ago')).findsOne();
+    });
+
+    testWidgets('dates', (tester) async {
+      final user = eg.user();
+      await setupPage(tester, users: [user], pageUserId: user.userId);
+
+      final now = DateTime.parse('2025-08-01 12:00');
+      await withClock(Clock.fixed(now), () async {
+        await update(tester, user, activeSeconds: now.difference(
+          DateTime.parse('2025-04-01 12:00')).inSeconds);
+        check(find.text('Active Apr 1')).findsOne();
+
+        await update(tester, user, activeSeconds: now.difference(
+          DateTime.parse('2024-04-01 12:00')).inSeconds);
+        check(find.text('Active Apr 1, 2024')).findsOne();
+      });
+    });
+
+    testWidgets('omit for bots', (tester) async {
+      final user = eg.user(isBot: true);
+      await setupPage(tester, users: [user], pageUserId: user.userId);
+      await update(tester, user, activeSeconds: 30);
+      check(find.text('Active now')).findsNothing();
+      check(find.textContaining('Active')).findsNothing();
+      check(find.textContaining('Idle')).findsNothing();
+      check(find.textContaining('Not active')).findsNothing();
+    });
+  });
+
   group('custom profile fields', () {
     testWidgets('page builds; profile page renders with profileData', (tester) async {
       await setupPage(tester,
@@ -152,16 +219,16 @@ void main() {
         ],
         pageUserId: 1,
         customProfileFields: [
-          mkCustomProfileField(0, CustomProfileFieldType.shortText),
-          mkCustomProfileField(1, CustomProfileFieldType.longText),
-          mkCustomProfileField(2, CustomProfileFieldType.choice,
+          eg.customProfileField(0, CustomProfileFieldType.shortText),
+          eg.customProfileField(1, CustomProfileFieldType.longText),
+          eg.customProfileField(2, CustomProfileFieldType.choice,
             fieldData: '{"x": {"text": "choiceValue", "order": "1"}}'),
-          mkCustomProfileField(3, CustomProfileFieldType.date),
-          mkCustomProfileField(4, CustomProfileFieldType.link),
-          mkCustomProfileField(5, CustomProfileFieldType.user),
-          mkCustomProfileField(6, CustomProfileFieldType.externalAccount,
+          eg.customProfileField(3, CustomProfileFieldType.date),
+          eg.customProfileField(4, CustomProfileFieldType.link),
+          eg.customProfileField(5, CustomProfileFieldType.user),
+          eg.customProfileField(6, CustomProfileFieldType.externalAccount,
             fieldData: '{"subtype": "external1"}'),
-          mkCustomProfileField(7, CustomProfileFieldType.pronouns),
+          eg.customProfileField(7, CustomProfileFieldType.pronouns),
         ], realmDefaultExternalAccounts: {
           'external1': RealmDefaultExternalAccount(
             name: 'external1',
@@ -206,7 +273,7 @@ void main() {
       await setupPage(tester,
         users: [user],
         pageUserId: user.userId,
-        customProfileFields: [mkCustomProfileField(0, CustomProfileFieldType.link)],
+        customProfileFields: [eg.customProfileField(0, CustomProfileFieldType.link)],
       );
 
       await tester.tap(find.text(testUrl));
@@ -225,7 +292,7 @@ void main() {
         users: [user],
         pageUserId: user.userId,
         customProfileFields: [
-          mkCustomProfileField(0, CustomProfileFieldType.externalAccount,
+          eg.customProfileField(0, CustomProfileFieldType.externalAccount,
             fieldData: '{"subtype": "external1"}')
         ],
         realmDefaultExternalAccounts: {
@@ -257,7 +324,7 @@ void main() {
       await setupPage(tester,
         users: users,
         pageUserId: 1,
-        customProfileFields: [mkCustomProfileField(0, CustomProfileFieldType.user)],
+        customProfileFields: [eg.customProfileField(0, CustomProfileFieldType.user)],
         navigatorObserver: testNavObserver,
       );
 
@@ -278,7 +345,7 @@ void main() {
       await setupPage(tester,
         users: users,
         pageUserId: 1,
-        customProfileFields: [mkCustomProfileField(0, CustomProfileFieldType.user)],
+        customProfileFields: [eg.customProfileField(0, CustomProfileFieldType.user)],
       );
 
       final textFinder = find.text('(unknown user)');
@@ -309,7 +376,7 @@ void main() {
         users: users,
         mutedUserIds: [2],
         pageUserId: 1,
-        customProfileFields: [mkCustomProfileField(0, CustomProfileFieldType.user)]);
+        customProfileFields: [eg.customProfileField(0, CustomProfileFieldType.user)]);
 
       check(find.text('Muted user')).findsOne();
       check(mutedAvatarFinder(2)).findsOne();
@@ -334,7 +401,7 @@ void main() {
       await setupPage(tester,
         users: users,
         pageUserId: 1,
-        customProfileFields: [mkCustomProfileField(0, CustomProfileFieldType.user)],
+        customProfileFields: [eg.customProfileField(0, CustomProfileFieldType.user)],
       );
 
       final avatars = tester.widgetList<Avatar>(find.byType(Avatar));
@@ -357,16 +424,16 @@ void main() {
 
       await setupPage(tester, users: [user, user2], pageUserId: user.userId,
         customProfileFields: [
-          mkCustomProfileField(0, CustomProfileFieldType.shortText),
-          mkCustomProfileField(1, CustomProfileFieldType.longText),
-          mkCustomProfileField(2, CustomProfileFieldType.choice,
+          eg.customProfileField(0, CustomProfileFieldType.shortText),
+          eg.customProfileField(1, CustomProfileFieldType.longText),
+          eg.customProfileField(2, CustomProfileFieldType.choice,
             fieldData: '{"x": {"text": "$longString", "order": "1"}}'),
           // no [CustomProfileFieldType.date] because those can't be made long
-          mkCustomProfileField(3, CustomProfileFieldType.link),
-          mkCustomProfileField(4, CustomProfileFieldType.user),
-          mkCustomProfileField(5, CustomProfileFieldType.externalAccount,
+          eg.customProfileField(3, CustomProfileFieldType.link),
+          eg.customProfileField(4, CustomProfileFieldType.user),
+          eg.customProfileField(5, CustomProfileFieldType.externalAccount,
             fieldData: '{"subtype": "external1"}'),
-          mkCustomProfileField(6, CustomProfileFieldType.pronouns),
+          eg.customProfileField(6, CustomProfileFieldType.pronouns),
         ], realmDefaultExternalAccounts: {
           'external1': RealmDefaultExternalAccount(
             name: 'external1',
@@ -375,6 +442,85 @@ void main() {
             urlPattern: 'https://example/%(username)s')});
 
       check(find.textContaining(longString).evaluate()).length.equals(7);
+    });
+  });
+
+  group('user status', () {
+    final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
+
+    Finder findStatusButton({required bool statusSet}) {
+      return find.widgetWithText(ZulipMenuItemButton,
+        statusSet
+          ? zulipLocalizations.statusButtonLabelStatusSet
+          : zulipLocalizations.statusButtonLabelStatusUnset);
+    }
+
+    testWidgets('non-self profile, status set: no status button, status info appears', (tester) async {
+      await setupPage(tester, pageUserId: eg.otherUser.userId, users: [eg.otherUser]);
+      await store.changeUserStatus(eg.otherUser.userId, UserStatusChange(
+        text: OptionSome('Busy'),
+        emoji: OptionSome(StatusEmoji(emojiName: 'working_on_it',
+          emojiCode: '1f6e0', reactionType: ReactionType.unicodeEmoji))));
+      await tester.pump();
+
+      check(findStatusButton(statusSet: true)).findsNothing();
+
+      final statusEmojiFinder = find.ancestor(of: find.text('\u{1f6e0}'),
+        matching: find.byType(UserStatusEmoji));
+      check(statusEmojiFinder).findsOne();
+      check(tester.widget<UserStatusEmoji>(statusEmojiFinder)
+        .neverAnimate).isFalse();
+      check(find.text('Busy')).findsOne();
+    });
+
+    group('self-profile', () {
+      testWidgets('no status set: status button appears', (tester) async {
+        await setupPage(tester, pageUserId: eg.selfUser.userId, users: [eg.selfUser]);
+        check(findStatusButton(statusSet: false)).findsOne();
+      });
+
+      testWidgets('status set: status button appears with status info inside it', (tester) async {
+        await setupPage(tester, pageUserId: eg.selfUser.userId, users: [eg.selfUser]);
+        await store.changeUserStatus(eg.selfUser.userId, UserStatusChange(
+          text: OptionSome('Busy'),
+          emoji: OptionSome(StatusEmoji(emojiName: 'working_on_it',
+            emojiCode: '1f6e0', reactionType: ReactionType.unicodeEmoji))));
+        await tester.pump();
+
+        final statusButtonFinder = findStatusButton(statusSet: true);
+        final statusEmojiFinder = find.ancestor(of: find.text('\u{1f6e0}'),
+          matching: find.byType(UserStatusEmoji));
+        final statusTextFinder = findText(includePlaceholders: false, 'Busy');
+
+        check(statusButtonFinder).findsOne();
+        check(statusEmojiFinder).findsOne();
+        check(tester.widget<UserStatusEmoji>(statusEmojiFinder)
+          .neverAnimate).isFalse();
+        check(statusTextFinder).findsOne();
+
+        check(find.descendant(of: statusButtonFinder,
+          matching: statusEmojiFinder)).findsOne();
+        check(find.descendant(of: statusButtonFinder,
+          matching: statusTextFinder)).findsOne();
+      });
+
+      testWidgets('not status text set: status button appears with a placeholder text inside it', (tester) async {
+        await setupPage(tester, pageUserId: eg.selfUser.userId, users: [eg.selfUser]);
+        await store.changeUserStatus(eg.selfUser.userId, UserStatusChange(
+          text: OptionNone(),
+          emoji: OptionSome(StatusEmoji(emojiName: 'working_on_it',
+            emojiCode: '1f6e0', reactionType: ReactionType.unicodeEmoji))));
+        await tester.pump();
+
+        final statusButtonFinder = findStatusButton(statusSet: true);
+        final textPlaceholderFinder = findText(
+          includePlaceholders: false, zulipLocalizations.noStatusText);
+
+        check(statusButtonFinder).findsOne();
+        check(textPlaceholderFinder).findsOne();
+        check(find.descendant(of: statusButtonFinder,
+          matching: textPlaceholderFinder)).findsOne();
+      });
     });
   });
 

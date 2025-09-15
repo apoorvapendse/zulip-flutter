@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import '../api/model/events.dart';
 import '../api/model/initial_snapshot.dart';
 import '../api/model/model.dart';
+import 'realm.dart';
+import 'store.dart';
+import 'user.dart';
 
 /// The portion of [PerAccountStore] for channels, topics, and stuff about them.
 ///
@@ -12,7 +15,10 @@ import '../api/model/model.dart';
 /// implementation of [PerAccountStore], to avoid circularity.
 ///
 /// The data structures described here are implemented at [ChannelStoreImpl].
-mixin ChannelStore {
+mixin ChannelStore on UserStore {
+  @protected
+  UserStore get userStore;
+
   /// All known channels/streams, indexed by [ZulipStream.streamId].
   ///
   /// The same [ZulipStream] objects also appear in [streamsByName].
@@ -136,6 +142,69 @@ mixin ChannelStore {
         return true;
     }
   }
+
+  bool selfHasContentAccess(ZulipStream channel) {
+    // Compare web's stream_data.has_content_access.
+    if (channel.isWebPublic) return true;
+    if (channel is Subscription) return true;
+    // Here web calls has_metadata_access... but that always returns true,
+    // as its comment says.
+    if (selfUser.role == UserRole.guest) return false;
+    if (!channel.inviteOnly) return true;
+    return _selfHasContentAccessViaGroupPermissions(channel);
+  }
+
+  bool _selfHasContentAccessViaGroupPermissions(ZulipStream channel) {
+    // Compare web's stream_data.has_content_access_via_group_permissions.
+    // TODO(#814) try to clean up this logic; perhaps record more explicitly
+    //   what default/fallback value to use for a given group-based permission
+    //   on older servers.
+
+    if (channel.canAddSubscribersGroup != null
+        && selfHasPermissionForGroupSetting(channel.canAddSubscribersGroup!,
+             GroupSettingType.stream, 'can_add_subscribers_group')) {
+      // The behavior before this permission was introduced was equivalent to
+      // the "nobody" group.
+      // TODO(server-10): simplify
+      return true;
+    }
+
+    if (channel.canSubscribeGroup != null
+        && selfHasPermissionForGroupSetting(channel.canSubscribeGroup!,
+             GroupSettingType.stream, 'can_subscribe_group')) {
+      // The behavior before this permission was introduced was equivalent to
+      // the "nobody" group.
+      // TODO(server-10): simplify
+      return true;
+    }
+
+    return false;
+  }
+
+  bool hasPostingPermission({
+    required ZulipStream inChannel,
+    required User user,
+    required DateTime byDate,
+  }) {
+    final role = user.role;
+    // We let the users with [unknown] role to send the message, then the server
+    // will decide to accept it or not based on its actual role.
+    if (role == UserRole.unknown) return true;
+
+    switch (inChannel.channelPostPolicy) {
+      case ChannelPostPolicy.any:             return true;
+      case ChannelPostPolicy.fullMembers:     {
+        if (!role.isAtLeast(UserRole.member)) return false;
+        if (role == UserRole.member) {
+          return hasPassedWaitingPeriod(user, byDate: byDate);
+        }
+        return true;
+      }
+      case ChannelPostPolicy.moderators:      return role.isAtLeast(UserRole.moderator);
+      case ChannelPostPolicy.administrators:  return role.isAtLeast(UserRole.administrator);
+      case ChannelPostPolicy.unknown:         return true;
+    }
+  }
 }
 
 /// Whether and how a given [UserTopicEvent] will affect the results
@@ -160,13 +229,50 @@ enum UserTopicVisibilityEffect {
   }
 }
 
+mixin ProxyChannelStore on ChannelStore {
+  @protected
+  ChannelStore get channelStore;
+
+  @override
+  Map<int, ZulipStream> get streams => channelStore.streams;
+
+  @override
+  Map<String, ZulipStream> get streamsByName => channelStore.streamsByName;
+
+  @override
+  Map<int, Subscription> get subscriptions => channelStore.subscriptions;
+
+  @override
+  UserTopicVisibilityPolicy topicVisibilityPolicy(int streamId, TopicName topic) =>
+    channelStore.topicVisibilityPolicy(streamId, topic);
+
+  @override
+  Map<int, Map<TopicName, UserTopicVisibilityPolicy>> get debugTopicVisibility =>
+    channelStore.debugTopicVisibility;
+}
+
+/// A base class for [PerAccountStore] substores
+/// that need access to [ChannelStore] as well as to its prerequisites
+/// [CorePerAccountStore], [RealmStore], and [UserStore].
+abstract class HasChannelStore extends HasUserStore with ChannelStore, ProxyChannelStore {
+  HasChannelStore({required ChannelStore channels})
+    : channelStore = channels, super(users: channels.userStore);
+
+  @protected
+  @override
+  final ChannelStore channelStore;
+}
+
 /// The implementation of [ChannelStore] that does the work.
 ///
 /// Generally the only code that should need this class is [PerAccountStore]
 /// itself.  Other code accesses this functionality through [PerAccountStore],
 /// or through the mixin [ChannelStore] which describes its interface.
-class ChannelStoreImpl with ChannelStore {
-  factory ChannelStoreImpl({required InitialSnapshot initialSnapshot}) {
+class ChannelStoreImpl extends HasUserStore with ChannelStore {
+  factory ChannelStoreImpl({
+    required UserStore users,
+    required InitialSnapshot initialSnapshot,
+  }) {
     final subscriptions = Map.fromEntries(initialSnapshot.subscriptions.map(
       (subscription) => MapEntry(subscription.streamId, subscription)));
 
@@ -186,6 +292,7 @@ class ChannelStoreImpl with ChannelStore {
     }
 
     return ChannelStoreImpl._(
+      users: users,
       streams: streams,
       streamsByName: streams.map((_, stream) => MapEntry(stream.name, stream)),
       subscriptions: subscriptions,
@@ -194,6 +301,7 @@ class ChannelStoreImpl with ChannelStore {
   }
 
   ChannelStoreImpl._({
+    required super.users,
     required this.streams,
     required this.streamsByName,
     required this.subscriptions,
@@ -273,6 +381,8 @@ class ChannelStoreImpl with ChannelStore {
             stream.name = event.value as String;
             streamsByName.remove(streamName);
             streamsByName[stream.name] = stream;
+          case ChannelPropertyName.isArchived:
+            stream.isArchived = event.value as bool;
           case ChannelPropertyName.description:
             stream.description = event.value as String;
           case ChannelPropertyName.firstMessageId:
@@ -283,6 +393,14 @@ class ChannelStoreImpl with ChannelStore {
             stream.messageRetentionDays = event.value as int?;
           case ChannelPropertyName.channelPostPolicy:
             stream.channelPostPolicy = event.value as ChannelPostPolicy;
+          case ChannelPropertyName.canAddSubscribersGroup:
+            stream.canAddSubscribersGroup = event.value as GroupSettingValue;
+          case ChannelPropertyName.canDeleteAnyMessageGroup:
+            stream.canDeleteAnyMessageGroup = event.value as GroupSettingValue;
+          case ChannelPropertyName.canDeleteOwnMessageGroup:
+            stream.canDeleteOwnMessageGroup = event.value as GroupSettingValue;
+          case ChannelPropertyName.canSubscribeGroup:
+            stream.canSubscribeGroup = event.value as GroupSettingValue;
           case ChannelPropertyName.streamWeeklyTraffic:
             stream.streamWeeklyTraffic = event.value as int?;
         }

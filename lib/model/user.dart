@@ -1,13 +1,19 @@
+import 'package:flutter/foundation.dart';
+
 import '../api/model/events.dart';
 import '../api/model/initial_snapshot.dart';
 import '../api/model/model.dart';
 import 'algorithms.dart';
 import 'localizations.dart';
 import 'narrow.dart';
+import 'realm.dart';
 import 'store.dart';
 
 /// The portion of [PerAccountStore] describing the users in the realm.
-mixin UserStore on PerAccountStoreBase {
+mixin UserStore on PerAccountStoreBase, RealmStore {
+  @protected
+  RealmStore get realmStore;
+
   /// The user with the given ID, if that user is known.
   ///
   /// There may be other users that are perfectly real but are
@@ -29,7 +35,10 @@ mixin UserStore on PerAccountStoreBase {
   /// Consider using [userDisplayName].
   User? getUser(int userId);
 
-  /// All known users in the realm.
+  /// All known users in the realm, including deactivated users.
+  ///
+  /// Before presenting these users in the UI, consider whether to exclude
+  /// users who are deactivated (see [User.isActive]) or muted ([isUserMuted]).
   ///
   /// This may have a large number of elements, like tens of thousands.
   /// Consider [getUser] or other alternatives to iterating through this.
@@ -82,6 +91,28 @@ mixin UserStore on PerAccountStoreBase {
     return getUser(senderId)?.fullName ?? message.senderFullName;
   }
 
+  /// Whether [user] has passed the realm's waiting period to be a full member.
+  ///
+  /// See:
+  ///   https://zulip.com/api/roles-and-permissions#determining-if-a-user-is-a-full-member
+  ///
+  /// To determine if a user is a full member, callers must also check that the
+  /// user's role is at least [UserRole.member].
+  bool hasPassedWaitingPeriod(User user, {required DateTime byDate}) {
+    // [User.dateJoined] is in UTC. For logged-in users, the format is:
+    // YYYY-MM-DDTHH:mm+00:00, which includes the timezone offset for UTC.
+    // For logged-out spectators, the format is: YYYY-MM-DD, which doesn't
+    // include the timezone offset. In the later case, [DateTime.parse] will
+    // interpret it as the client's local timezone, which could lead to
+    // incorrect results; but that's acceptable for now because the app
+    // doesn't support viewing as a spectator.
+    //
+    // See the related discussion:
+    //   https://chat.zulip.org/#narrow/channel/412-api-documentation/topic/provide.20an.20explicit.20format.20for.20.60realm_user.2Edate_joined.60/near/1980194
+    final dateJoined = DateTime.parse(user.dateJoined);
+    return byDate.difference(dateJoined).inDays >= realmWaitingPeriodThreshold;
+  }
+
   /// Whether the user with [userId] is muted by the self-user.
   ///
   /// Looks for [userId] in a private [Set],
@@ -126,23 +157,68 @@ enum MutedUsersVisibilityEffect {
   mixed;
 }
 
+mixin ProxyUserStore on UserStore {
+  @protected
+  UserStore get userStore;
+
+  @override
+  User? getUser(int userId) => userStore.getUser(userId);
+
+  @override
+  Iterable<User> get allUsers => userStore.allUsers;
+
+  @override
+  bool isUserMuted(int userId, {MutedUsersEvent? event}) =>
+    userStore.isUserMuted(userId, event: event);
+
+  @override
+  MutedUsersVisibilityEffect mightChangeShouldMuteDmConversation(MutedUsersEvent event) =>
+    userStore.mightChangeShouldMuteDmConversation(event);
+
+  @override
+  UserStatus getUserStatus(int userId) => userStore.getUserStatus(userId);
+}
+
+/// A base class for [PerAccountStore] substores that need access to [UserStore]
+/// as well as to its prerequisites [CorePerAccountStore] and [RealmStore].
+abstract class HasUserStore extends HasRealmStore with UserStore, ProxyUserStore {
+  HasUserStore({required UserStore users})
+    : userStore = users, super(realm: users.realmStore);
+
+  @protected
+  @override
+  final UserStore userStore;
+}
+
 /// The implementation of [UserStore] that does the work.
 ///
 /// Generally the only code that should need this class is [PerAccountStore]
 /// itself.  Other code accesses this functionality through [PerAccountStore],
 /// or through the mixin [UserStore] which describes its interface.
-class UserStoreImpl extends PerAccountStoreBase with UserStore {
+class UserStoreImpl extends HasRealmStore with UserStore {
+  /// Construct an implementation of [UserStore] that does the work itself.
+  ///
+  /// The `userMap` parameter should be the result of
+  /// [UserStoreImpl.userMapFromInitialSnapshot] applied to `initialSnapshot`.
   UserStoreImpl({
-    required super.core,
+    required super.realm,
     required InitialSnapshot initialSnapshot,
-  }) : _users = Map.fromEntries(
-         initialSnapshot.realmUsers
-         .followedBy(initialSnapshot.realmNonActiveUsers)
-         .followedBy(initialSnapshot.crossRealmBots)
-         .map((user) => MapEntry(user.userId, user))),
+    required Map<int, User> userMap,
+  }) : _users = userMap,
        _mutedUsers = Set.from(initialSnapshot.mutedUsers.map((item) => item.id)),
        _userStatuses = initialSnapshot.userStatuses.map((userId, change) =>
-         MapEntry(userId, change.apply(UserStatus.zero)));
+         MapEntry(userId, change.apply(UserStatus.zero))) {
+    // Verify that [selfUser] will work.
+    assert(_users.containsKey(selfUserId));
+  }
+
+  static Map<int, User> userMapFromInitialSnapshot(InitialSnapshot initialSnapshot) {
+    return Map.fromEntries(
+      initialSnapshot.realmUsers
+      .followedBy(initialSnapshot.realmNonActiveUsers)
+      .followedBy(initialSnapshot.crossRealmBots)
+      .map((user) => MapEntry(user.userId, user)));
+  }
 
   final Map<int, User> _users;
 
@@ -206,7 +282,6 @@ class UserStoreImpl extends PerAccountStoreBase with UserStore {
         if (event.timezone != null)       user.timezone       = event.timezone!;
         if (event.botOwnerId != null)     user.botOwnerId     = event.botOwnerId!;
         if (event.role != null)           user.role           = event.role!;
-        if (event.isBillingAdmin != null) user.isBillingAdmin = event.isBillingAdmin!;
         if (event.deliveryEmail != null)  user.deliveryEmail  = event.deliveryEmail!.value;
         if (event.newEmail != null)       user.email          = event.newEmail!;
         if (event.isActive != null)       user.isActive       = event.isActive!;

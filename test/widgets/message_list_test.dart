@@ -1,19 +1,23 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:checks/checks.dart';
+import 'package:clock/clock.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_checks/flutter_checks.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:zulip/api/exception.dart';
 import 'package:zulip/api/model/events.dart';
 import 'package:zulip/api/model/initial_snapshot.dart';
 import 'package:zulip/api/model/model.dart';
 import 'package:zulip/api/model/narrow.dart';
 import 'package:zulip/api/route/channels.dart';
 import 'package:zulip/api/route/messages.dart';
+import 'package:zulip/basic.dart';
 import 'package:zulip/model/actions.dart';
 import 'package:zulip/model/localizations.dart';
 import 'package:zulip/model/message.dart';
@@ -33,6 +37,7 @@ import 'package:zulip/widgets/store.dart';
 import 'package:zulip/widgets/channel_colors.dart';
 import 'package:zulip/widgets/theme.dart';
 import 'package:zulip/widgets/topic_list.dart';
+import 'package:zulip/widgets/user.dart';
 
 import '../api/fake_api.dart';
 import '../example_data.dart' as eg;
@@ -43,11 +48,8 @@ import '../flutter_checks.dart';
 import '../stdlib_checks.dart';
 import '../test_images.dart';
 import '../test_navigation.dart';
-import 'compose_box_checks.dart';
-import 'content_checks.dart';
+import 'checks.dart';
 import 'dialog_checks.dart';
-import 'message_list_checks.dart';
-import 'page_checks.dart';
 import 'test_app.dart';
 
 void main() {
@@ -403,7 +405,31 @@ void main() {
   });
 
   group('presents message content appropriately', () {
-    testWidgets('content not asked to consume insets (including bottom), even without compose box', (tester) async {
+    testWidgets('content not asked to consume insets (including bottom), even without compose box, in top sliver', (tester) async {
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/1523
+      const fakePadding = FakeViewPadding(left: 10, top: 10, right: 10, bottom: 10);
+      tester.view.viewInsets = fakePadding;
+      tester.view.padding = fakePadding;
+
+      await setupMessageListPage(tester, narrow: const CombinedFeedNarrow(),
+        messages: [
+          eg.streamMessage(content: ContentExample.codeBlockPlain.html),
+          eg.streamMessage(),
+        ]);
+
+      // Verify this message list lacks a compose box.
+      // (The original bug wouldn't reproduce with a compose box present.)
+      final state = MessageListPage.ancestorOf(tester.element(find.text("verb\natim")));
+      check(state.composeBoxState).isNull();
+      // Also verify that the first message is in the top sliver.
+      check(state.model!.middleMessage).equals(1);
+
+      final element = tester.element(find.byType(CodeBlock));
+      final padding = MediaQuery.of(element).padding;
+      check(padding).equals(EdgeInsets.zero);
+    });
+
+    testWidgets('content not asked to consume insets (including bottom), even without compose box, in bottom sliver', (tester) async {
       // Regression test for: https://github.com/zulip/zulip-flutter/issues/736
       const fakePadding = FakeViewPadding(left: 10, top: 10, right: 10, bottom: 10);
       tester.view.viewInsets = fakePadding;
@@ -416,6 +442,8 @@ void main() {
       // (The original bug wouldn't reproduce with a compose box present.)
       final state = MessageListPage.ancestorOf(tester.element(find.text("verb\natim")));
       check(state.composeBoxState).isNull();
+      // Also verify that the message is in the bottom sliver.
+      check(state.model!.middleMessage).equals(0);
 
       final element = tester.element(find.byType(CodeBlock));
       final padding = MediaQuery.of(element).padding;
@@ -491,7 +519,7 @@ void main() {
           ..method.equals('GET')
           ..url.path.equals('/api/v1/messages')
           ..url.queryParameters.deepEquals({
-            'narrow': jsonEncode(narrow.apiEncode()),
+            'narrow': jsonEncode(resolveApiNarrowForServer(narrow.apiEncode(), connection.zulipFeatureLevel!)),
             'anchor': AnchorCode.firstUnread.toJson(),
             'num_before': kMessageListFetchBatchSize.toString(),
             'num_after': kMessageListFetchBatchSize.toString(),
@@ -524,7 +552,7 @@ void main() {
           ..method.equals('GET')
           ..url.path.equals('/api/v1/messages')
           ..url.queryParameters.deepEquals({
-            'narrow': jsonEncode(narrow.apiEncode()),
+            'narrow': jsonEncode(resolveApiNarrowForServer(narrow.apiEncode(), connection.zulipFeatureLevel!)),
             'anchor': AnchorCode.firstUnread.toJson(),
             'num_before': kMessageListFetchBatchSize.toString(),
             'num_after': kMessageListFetchBatchSize.toString(),
@@ -1080,7 +1108,7 @@ void main() {
               'include_anchor': 'false',
               'num_before': '0',
               'num_after': '1000',
-              'narrow': jsonEncode(apiNarrow),
+              'narrow': jsonEncode(resolveApiNarrowForServer(apiNarrow, connection.zulipFeatureLevel!)),
               'op': 'add',
               'flag': 'read',
             });
@@ -1638,26 +1666,80 @@ void main() {
     });
   });
 
-  group('formatHeaderDate', () {
-    final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
-    final now = DateTime.parse("2023-01-10 12:00");
-    final testCases = [
-      ("2023-01-10 12:00", zulipLocalizations.today),
-      ("2023-01-10 00:00", zulipLocalizations.today),
-      ("2023-01-10 23:59", zulipLocalizations.today),
-      ("2023-01-09 23:59", zulipLocalizations.yesterday),
-      ("2023-01-09 00:00", zulipLocalizations.yesterday),
-      ("2023-01-08 00:00", "Jan 8"),
-      ("2022-12-31 00:00", "Dec 31, 2022"),
-      // Future times
-      ("2023-01-10 19:00", zulipLocalizations.today),
-      ("2023-01-11 00:00", "Jan 11, 2023"),
-    ];
-    for (final (dateTime, expected) in testCases) {
-      test('$dateTime returns $expected', () {
-        check(formatHeaderDate(zulipLocalizations, DateTime.parse(dateTime), now: now))
-          .equals(expected);
-      });
+  group('MessageTimestampStyle', () {
+    void doTests(
+      MessageTimestampStyle style,
+      List<(
+        String timestampStr,
+        String? expectedTwelveHour,
+        String? expectedTwentyFourHour,
+      )> cases, {
+      DateTime? now,
+    }) {
+      now ??= DateTime.parse("2023-01-10 12:00");
+      for (final (timestampStr, expectedTwelveHour, expectedTwentyFourHour) in cases) {
+        for (final mode in TwentyFourHourTimeMode.values) {
+          final expected = switch (mode) {
+            TwentyFourHourTimeMode.twelveHour => expectedTwelveHour,
+            TwentyFourHourTimeMode.twentyFourHour => expectedTwentyFourHour,
+            // This expectation will hold as long as we're always using the
+            // default locale, en_US, which uses the twelve-hour format.
+            // TODO(#1727) test with other locales
+            TwentyFourHourTimeMode.localeDefault => expectedTwelveHour,
+          };
+
+          test('${style.name} in ${mode.name}: $timestampStr returns $expected', () {
+            addTearDown(testBinding.reset);
+            final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
+
+            withClock(Clock.fixed(now!), () {
+              final timestamp = DateTime.parse(timestampStr)
+                .millisecondsSinceEpoch ~/ 1000;
+              final result = style.format(
+                timestamp,
+                now: testBinding.utcNow().toLocal(),
+                twentyFourHourTimeMode: mode,
+                zulipLocalizations: zulipLocalizations);
+              check(result).equals(expected);
+            });
+          });
+        }
+      }
+    }
+
+    for (final style in MessageTimestampStyle.values) {
+      switch (style) {
+        case MessageTimestampStyle.none:
+          doTests(style, [('2023-01-10 12:00', null, null)]);
+        case MessageTimestampStyle.dateOnlyRelative:
+          final zulipLocalizations = GlobalLocalizations.zulipLocalizations;
+          doTests(style,
+            now: DateTime.parse("2023-01-10 12:00"),
+            [
+              ("2023-01-10 12:00", zulipLocalizations.today,     zulipLocalizations.today),
+              ("2023-01-10 00:00", zulipLocalizations.today,     zulipLocalizations.today),
+              ("2023-01-10 23:59", zulipLocalizations.today,     zulipLocalizations.today),
+              ("2023-01-09 23:59", zulipLocalizations.yesterday, zulipLocalizations.yesterday),
+              ("2023-01-09 00:00", zulipLocalizations.yesterday, zulipLocalizations.yesterday),
+              ("2023-01-08 00:00", "Jan 8", "Jan 8"),
+              ("2022-12-31 00:00", "Dec 31, 2022", "Dec 31, 2022"),
+              // Future times
+              ("2023-01-10 19:00", zulipLocalizations.today, zulipLocalizations.today),
+              ("2023-01-11 00:00", "Jan 11, 2023", "Jan 11, 2023"),
+            ]);
+        case MessageTimestampStyle.timeOnly:
+          doTests(style, [('2023-01-10 12:00', '12:00 PM', '12:00')]);
+        case MessageTimestampStyle.lightbox:
+          doTests(style,
+            [('2023-01-10 12:00',
+              'Jan 10, 2023 12:00:00 PM',
+              'Jan 10, 2023 12:00:00')]);
+        case MessageTimestampStyle.full:
+          doTests(style,
+            [('2023-01-10 12:00',
+              'Jan 10, 2023 12:00 PM',
+              'Jan 10, 2023 12:00')]);
+      }
     }
   });
 
@@ -1770,6 +1852,74 @@ void main() {
       checkUser(users[2], isBot: false);
 
       debugNetworkImageHttpClientProvider = null;
+    });
+
+    group('User status', () {
+      void checkFindsStatusEmoji(WidgetTester tester, Finder emojiFinder) {
+        final statusEmojiFinder = find.ancestor(of: emojiFinder,
+          matching: find.byType(UserStatusEmoji));
+        check(statusEmojiFinder).findsOne();
+        check(tester.widget<UserStatusEmoji>(statusEmojiFinder)
+          .neverAnimate).isTrue();
+        check(find.ancestor(of: statusEmojiFinder,
+          matching: find.byType(SenderRow))).findsOne();
+      }
+
+      testWidgets('emoji (unicode) & text are set -> emoji is displayed, text is not', (tester) async {
+        final user = eg.user();
+        await setupMessageListPage(tester,
+          users: [user], messages: [eg.streamMessage(sender: user)]);
+        await store.changeUserStatus(user.userId, UserStatusChange(
+          text: OptionSome('Busy'),
+          emoji: OptionSome(StatusEmoji(emojiName: 'working_on_it',
+            emojiCode: '1f6e0', reactionType: ReactionType.unicodeEmoji))));
+        await tester.pump();
+
+        checkFindsStatusEmoji(tester, find.text('\u{1f6e0}'));
+        check(find.textContaining('Busy')).findsNothing();
+      });
+
+      testWidgets('emoji (image) & text are set -> emoji is displayed, text is not', (tester) async {
+        prepareBoringImageHttpClient();
+
+        final user = eg.user();
+        await setupMessageListPage(tester,
+          users: [user], messages: [eg.streamMessage(sender: user)]);
+        await store.changeUserStatus(user.userId, UserStatusChange(
+          text: OptionSome('Coding'),
+          emoji: OptionSome(StatusEmoji(emojiName: 'zulip',
+            emojiCode: 'zulip', reactionType: ReactionType.zulipExtraEmoji))));
+        await tester.pump();
+
+        checkFindsStatusEmoji(tester, find.byType(Image));
+        check(find.textContaining('Coding')).findsNothing();
+
+        debugNetworkImageHttpClientProvider = null;
+      });
+
+      testWidgets('longer user name -> emoji stays visible', (tester) async {
+        final user = eg.user(fullName: 'User with a very very very long name to check if emoji is still visible');
+        await setupMessageListPage(tester,
+          users: [user], messages: [eg.streamMessage(sender: user)]);
+        await store.changeUserStatus(user.userId, UserStatusChange(
+          text: OptionNone(),
+          emoji: OptionSome(StatusEmoji(emojiName: 'working_on_it',
+            emojiCode: '1f6e0', reactionType: ReactionType.unicodeEmoji))));
+        await tester.pump();
+
+        checkFindsStatusEmoji(tester, find.text('\u{1f6e0}'));
+      });
+
+      testWidgets('emoji is not set, text is set -> text is not displayed', (tester) async {
+        final user = eg.user();
+        await setupMessageListPage(tester,
+          users: [user], messages: [eg.streamMessage(sender: user)]);
+        await store.changeUserStatus(user.userId, UserStatusChange(
+          text: OptionSome('Busy'), emoji: OptionNone()));
+        await tester.pump();
+
+        check(find.textContaining('Busy')).findsNothing();
+      });
     });
 
     group('Muted sender', () {
@@ -2013,16 +2163,14 @@ void main() {
     });
 
     testWidgets('hidden -> failed, tapping does nothing if compose box is not offered', (tester) async {
-      Route<dynamic>? lastPoppedRoute;
-      final navObserver = TestNavigatorObserver()
-        ..onPopped = (route, prevRoute) => lastPoppedRoute = route;
+      final transitionDurationObserver = TransitionDurationObserver();
 
       final messages = [eg.streamMessage(
         stream: stream, topic: topic, content: content)];
       await setupMessageListPage(tester,
         narrow: const CombinedFeedNarrow(),
         streams: [stream], subscriptions: [eg.subscription(stream)],
-        navObservers: [navObserver],
+        navObservers: [transitionDurationObserver],
         messages: messages);
 
       // Navigate to a message list page in a topic narrow,
@@ -2031,7 +2179,7 @@ void main() {
         eg.newestGetMessagesResult(foundOldest: true, messages: messages).toJson());
       await tester.tap(find.widgetWithText(RecipientHeader, topic));
       await tester.pump(); // handle tap
-      await tester.pump(); // wait for navigation
+      await transitionDurationObserver.pumpPastTransition(tester);
       check(contentInputFinder).findsOne();
 
       await sendMessageAndFail(tester);
@@ -2040,12 +2188,8 @@ void main() {
       // where the failed to send message should be visible.
 
       await tester.pageBack();
-      check(lastPoppedRoute)
-        .isA<MaterialAccountWidgetRoute>().page
-        .isA<MessageListPage>()
-        .initNarrow.equals(TopicNarrow(stream.streamId, eg.t(topic)));
       await tester.pump(); // handle tap
-      await tester.pump((lastPoppedRoute as TransitionRoute).reverseTransitionDuration);
+      await transitionDurationObserver.pumpPastTransition(tester);
       check(contentInputFinder).findsNothing();
       check(messageNotSentFinder).findsOne();
 
@@ -2158,9 +2302,9 @@ void main() {
         messages: [message]);
 
       connection.prepare(json: UpdateMessageResult().toJson());
-      store.editMessage(messageId: message.id,
+      unawaited(store.editMessage(messageId: message.id,
         originalRawContent: 'foo',
-        newContent: 'bar');
+        newContent: 'bar'));
       await tester.pump(Duration.zero);
       checkEditInProgress(tester);
       await store.handleEvent(eg.updateMessageEditEvent(message));
@@ -2175,12 +2319,14 @@ void main() {
         messages: [message]);
 
       connection.prepare(apiException: eg.apiBadRequest(), delay: Duration(seconds: 1));
-      store.editMessage(messageId: message.id,
+      unawaited(check(store.editMessage(messageId: message.id,
         originalRawContent: 'foo',
-        newContent: 'bar');
+        newContent: 'bar')).throws<ZulipApiException>());
       await tester.pump(Duration.zero);
       checkEditInProgress(tester);
       await tester.pump(Duration(seconds: 1));
+      // (the error dialog is tested elsewhere;
+      // it's triggered in the "Save" tap handler, not store.editMessage)
       checkEditFailed(tester);
 
       connection.prepare(json: GetMessageResult(

@@ -80,7 +80,7 @@ class ChannelNarrow extends Narrow {
   }
 
   @override
-  ApiNarrow apiEncode() => [ApiNarrowStream(streamId)];
+  ApiNarrow apiEncode() => [ApiNarrowChannel(streamId)];
 
   @override
   String toString() => 'ChannelNarrow($streamId)';
@@ -108,24 +108,6 @@ class TopicNarrow extends Narrow implements SendableNarrow {
 
   TopicNarrow sansWith() => TopicNarrow(streamId, topic);
 
-  /// Process [topic] to match how it would appear on a message object from
-  /// the server.
-  ///
-  /// Returns a new [TopicNarrow] with the [topic] processed.
-  ///
-  /// See [TopicName.processLikeServer].
-  TopicNarrow processTopicLikeServer({
-    required int zulipFeatureLevel,
-    required String? realmEmptyTopicDisplayName,
-  }) {
-    return TopicNarrow(
-      streamId,
-      topic.processLikeServer(
-        zulipFeatureLevel: zulipFeatureLevel,
-        realmEmptyTopicDisplayName: realmEmptyTopicDisplayName),
-      with_: with_);
-  }
-
   @override
   bool containsMessage(MessageBase message) {
     final conversation = message.conversation;
@@ -135,7 +117,7 @@ class TopicNarrow extends Narrow implements SendableNarrow {
 
   @override
   ApiNarrow apiEncode() => [
-    ApiNarrowStream(streamId),
+    ApiNarrowChannel(streamId),
     ApiNarrowTopic(topic),
     if (with_ != null) ApiNarrowWith(with_!),
   ];

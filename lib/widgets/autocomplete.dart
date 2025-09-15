@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../generated/l10n/zulip_localizations.dart';
 import '../model/emoji.dart';
 import '../model/store.dart';
-import 'content.dart';
 import 'emoji.dart';
 import 'icons.dart';
 import 'store.dart';
@@ -13,6 +12,7 @@ import '../model/narrow.dart';
 import 'compose_box.dart';
 import 'text.dart';
 import 'theme.dart';
+import 'user.dart';
 
 abstract class AutocompleteField<QueryT extends AutocompleteQuery, ResultT extends AutocompleteResult> extends StatefulWidget {
   const AutocompleteField({
@@ -178,8 +178,8 @@ class ComposeAutocomplete extends AutocompleteField<ComposeAutocompleteQuery, Co
   @override
   ComposeAutocompleteView initViewModel(BuildContext context, ComposeAutocompleteQuery query) {
     final store = PerAccountStoreWidget.of(context);
-    final localizations = ZulipLocalizations.of(context);
-    return query.initViewModel(store: store, localizations: localizations,
+    final zulipLocalizations = ZulipLocalizations.of(context);
+    return query.initViewModel(store: store, localizations: zulipLocalizations,
       narrow: narrow);
   }
 
@@ -202,12 +202,30 @@ class ComposeAutocomplete extends AutocompleteField<ComposeAutocompleteQuery, Co
         if (query is! MentionAutocompleteQuery) {
           return; // Shrug; similar to `intent == null` case above.
         }
-        final user = store.getUser(userId)!; // must exist because UserMentionAutocompleteResult
-        // TODO(i18n) language-appropriate space character; check active keyboard?
+        final user = store.getUser(userId);
+        if (user == null) {
+          // Don't crash on theoretical race between async results-filtering
+          // and losing data for the user.
+          return;
+        }
+        // TODO(#1805) language-appropriate space character; check active keyboard?
         //   (maybe handle centrally in `controller`)
         replacementString = '${userMention(user, silent: query.silent, users: store)} ';
       case WildcardMentionAutocompleteResult(:var wildcardOption):
         replacementString = '${wildcardMention(wildcardOption, store: store)} ';
+      case UserGroupMentionAutocompleteResult(:final groupId):
+        if (query is! MentionAutocompleteQuery) {
+          return; // Shrug; similar to `intent == null` case above.
+        }
+        final userGroup = store.getGroup(groupId);
+        if (userGroup == null) {
+          // Don't crash on theoretical race between async results-filtering
+          // and losing data for the group.
+          return;
+        }
+        // TODO(#1805) language-appropriate space character; check active keyboard?
+        //   (maybe handle centrally in `controller`)
+        replacementString = '${userGroupMention(userGroup.name, silent: query.silent)} ';
     }
 
     controller.value = intent.textEditingValue.replaced(
@@ -223,7 +241,7 @@ class ComposeAutocomplete extends AutocompleteField<ComposeAutocompleteQuery, Co
     final designVariables = DesignVariables.of(context);
 
     final child = switch (option) {
-      MentionAutocompleteResult() => _MentionAutocompleteItem(
+      MentionAutocompleteResult() => MentionAutocompleteItem(
         option: option, narrow: narrow),
       EmojiAutocompleteResult() => _EmojiAutocompleteItem(option: option),
     };
@@ -238,8 +256,13 @@ class ComposeAutocomplete extends AutocompleteField<ComposeAutocompleteQuery, Co
   }
 }
 
-class _MentionAutocompleteItem extends StatelessWidget {
-  const _MentionAutocompleteItem({required this.option, required this.narrow});
+@visibleForTesting
+class MentionAutocompleteItem extends StatelessWidget {
+  const MentionAutocompleteItem({
+    super.key,
+    required this.option,
+    required this.narrow,
+  });
 
   final MentionAutocompleteResult option;
   final Narrow narrow;
@@ -250,18 +273,18 @@ class _MentionAutocompleteItem extends StatelessWidget {
   }) {
     final isDmNarrow = narrow is DmNarrow;
     final isChannelWildcardAvailable = store.zulipFeatureLevel >= 247; // TODO(server-9)
-    final localizations = ZulipLocalizations.of(context);
+    final zulipLocalizations = ZulipLocalizations.of(context);
     return switch (wildcardOption) {
       WildcardMentionOption.all || WildcardMentionOption.everyone => isDmNarrow
-        ? localizations.wildcardMentionAllDmDescription
+        ? zulipLocalizations.wildcardMentionAllDmDescription
         : isChannelWildcardAvailable
-            ? localizations.wildcardMentionChannelDescription
-            : localizations.wildcardMentionStreamDescription,
-      WildcardMentionOption.channel => localizations.wildcardMentionChannelDescription,
+            ? zulipLocalizations.wildcardMentionChannelDescription
+            : zulipLocalizations.wildcardMentionStreamDescription,
+      WildcardMentionOption.channel => zulipLocalizations.wildcardMentionChannelDescription,
       WildcardMentionOption.stream => isChannelWildcardAvailable
-        ? localizations.wildcardMentionChannelDescription
-        : localizations.wildcardMentionStreamDescription,
-      WildcardMentionOption.topic => localizations.wildcardMentionTopicDescription,
+        ? zulipLocalizations.wildcardMentionChannelDescription
+        : zulipLocalizations.wildcardMentionStreamDescription,
+      WildcardMentionOption.topic => zulipLocalizations.wildcardMentionTopicDescription,
     };
   }
 
@@ -272,29 +295,45 @@ class _MentionAutocompleteItem extends StatelessWidget {
 
     Widget avatar;
     String label;
+    Widget? emoji;
     String? sublabel;
     switch (option) {
       case UserMentionAutocompleteResult(:var userId):
         avatar = Avatar(userId: userId, size: 36, borderRadius: 4);
         label = store.userDisplayName(userId);
-        sublabel = store.userDisplayEmail(userId);
+        emoji = UserStatusEmoji(userId: userId, size: 18,
+          padding: const EdgeInsetsDirectional.only(start: 5.0));
+        sublabel = store.getUser(userId)?.deliveryEmail;
+      case UserGroupMentionAutocompleteResult(:final groupId):
+        final group = store.getGroup(groupId);
+        avatar = SizedBox.square(dimension: 36,
+          child: const Icon(ZulipIcons.three_person, size: 24));
+        label = group?.name
+          // Don't crash on theoretical race between async results-filtering
+          // and losing data for the group.
+          ?? '';
+        emoji = null;
+        sublabel = group?.description;
       case WildcardMentionAutocompleteResult(:var wildcardOption):
         avatar = SizedBox.square(dimension: 36,
           child: const Icon(ZulipIcons.three_person, size: 24));
         label = wildcardOption.canonicalString;
+        emoji = null;
         sublabel = wildcardSublabel(wildcardOption, context: context, store: store);
     }
 
-    final labelWidget = Text(
-      label,
-      style: TextStyle(
-        fontSize: 18,
-        height: 20 / 18,
-        color: designVariables.contextMenuItemLabel,
-      ).merge(weightVariableTextStyle(context,
-          wght: sublabel == null ? 500 : 600)),
-      overflow: TextOverflow.ellipsis,
-      maxLines: 1);
+    final labelWidget = Row(children: [
+      Flexible(child: Text(label,
+        style: TextStyle(
+          fontSize: 18,
+          height: 20 / 18,
+          color: designVariables.contextMenuItemLabel,
+        ).merge(weightVariableTextStyle(context,
+            wght: sublabel == null ? 500 : 600)),
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1)),
+      ?emoji,
+    ]);
 
     final sublabelWidget = sublabel == null ? null : Text(
       sublabel,
@@ -313,10 +352,7 @@ class _MentionAutocompleteItem extends StatelessWidget {
         Expanded(child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            labelWidget,
-            if (sublabelWidget != null) sublabelWidget,
-          ])),
+          children: [labelWidget, ?sublabelWidget])),
       ]));
   }
 }

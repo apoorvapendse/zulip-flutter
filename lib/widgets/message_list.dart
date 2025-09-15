@@ -8,6 +8,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../api/model/model.dart';
 import '../generated/l10n/zulip_localizations.dart';
+import '../model/binding.dart';
 import '../model/database.dart';
 import '../model/message.dart';
 import '../model/message_list.dart';
@@ -31,6 +32,7 @@ import 'store.dart';
 import 'text.dart';
 import 'theme.dart';
 import 'topic_list.dart';
+import 'user.dart';
 
 /// Message-list styles that differ between light and dark themes.
 class MessageListTheme extends ThemeExtension<MessageListTheme> {
@@ -131,7 +133,7 @@ class MessageListTheme extends ThemeExtension<MessageListTheme> {
 /// The interface for the state of a [MessageListPage].
 ///
 /// To obtain one of these, see [MessageListPage.ancestorOf].
-abstract class MessageListPageState {
+abstract class MessageListPageState extends State<MessageListPage> {
   /// The narrow for this page's message list.
   Narrow get narrow;
 
@@ -169,11 +171,20 @@ class MessageListPage extends StatefulWidget {
     this.initAnchorMessageId,
   });
 
-  static AccountRoute<void> buildRoute({int? accountId, BuildContext? context,
-      required Narrow narrow, int? initAnchorMessageId}) {
-    return MaterialAccountWidgetRoute(accountId: accountId, context: context,
+  static AccountRoute<void> buildRoute({
+    int? accountId,
+    BuildContext? context,
+    GlobalKey<MessageListPageState>? key,
+    required Narrow narrow,
+    int? initAnchorMessageId,
+  }) {
+    return MaterialAccountWidgetRoute(
+      accountId: accountId,
+      context: context,
       page: MessageListPage(
-        initNarrow: narrow, initAnchorMessageId: initAnchorMessageId));
+        key: key,
+        initNarrow: narrow,
+        initAnchorMessageId: initAnchorMessageId));
   }
 
   /// The "revealed" state of a message from a muted sender,
@@ -195,12 +206,28 @@ class MessageListPage extends StatefulWidget {
   ///
   /// Uses the inefficient [BuildContext.findAncestorStateOfType];
   /// don't call this in a build method.
-  // If we do find ourselves wanting this in a build method, it won't be hard
-  // to enable that: we'd just need to add an [InheritedWidget] here.
+  ///
+  /// See also:
+  ///  * [maybeAncestorOf], which returns null instead of throwing
+  ///    when an ancestor [MessageListPageState] is not found.
   static MessageListPageState ancestorOf(BuildContext context) {
-    final state = context.findAncestorStateOfType<_MessageListPageState>();
+    final state = maybeAncestorOf(context);
     assert(state != null, 'No MessageListPage ancestor');
     return state!;
+  }
+
+  /// The [MessageListPageState] above this context in the tree, if any.
+  ///
+  /// Uses the inefficient [BuildContext.findAncestorStateOfType];
+  /// don't call this in a build method.
+  ///
+  /// See also:
+  ///  * [ancestorOf], which throws instead of returning null
+  ///    when an ancestor [MessageListPageState] is not found.
+  // If we do find ourselves wanting this in a build method, it won't be hard
+  // to enable that: we'd just need to add an [InheritedWidget] here.
+  static MessageListPageState? maybeAncestorOf(BuildContext context) {
+    return context.findAncestorStateOfType<_MessageListPageState>();
   }
 
   final Narrow initNarrow;
@@ -582,7 +609,7 @@ class MessageListAppBarTitle extends StatelessWidget {
               behavior: HitTestBehavior.translucent,
               onLongPress: () {
                 final someMessage = MessageListPage.ancestorOf(context)
-                  .model?.messages.firstOrNull;
+                  .model?.messages.lastOrNull;
                 // If someMessage is null, the topic action sheet won't have a
                 // resolve/unresolve button. That seems OK; in that case we're
                 // either still fetching messages (and the user can reopen the
@@ -773,14 +800,12 @@ class _MessageListState extends State<MessageList> with PerAccountStoreAwareStat
   }
 
   void _initModel(PerAccountStore store, Anchor anchor) {
-    // Normalize topic name if this is a TopicNarrow. See #1717.
     var narrow = widget.narrow;
     if (narrow is TopicNarrow) {
-      narrow = narrow.processTopicLikeServer(
-        zulipFeatureLevel: store.zulipFeatureLevel,
-        realmEmptyTopicDisplayName: store.zulipFeatureLevel > 334
-          ? store.realmEmptyTopicDisplayName
-          : null);
+      // Normalize topic name.  See #1717.
+      narrow = TopicNarrow(narrow.streamId,
+        store.processTopicLikeServer(narrow.topic),
+        with_: narrow.with_);
       if (narrow != widget.narrow) {
         SchedulerBinding.instance.scheduleFrameCallback((_) {
           widget.onNarrowChanged(narrow);
@@ -1044,7 +1069,7 @@ class _MessageListState extends State<MessageList> with PerAccountStoreAwareStat
 
     // The top sliver has its child 0 as the item just before the
     // sliver boundary, child 1 as the item before that, and so on.
-    final topSliver = SliverStickyHeaderList(
+    Widget topSliver = SliverStickyHeaderList(
       headerPlacement: HeaderPlacement.scrollingStart,
       delegate: SliverChildBuilderDelegate(
         // To preserve state across rebuilds for individual [MessageItem]
@@ -1123,6 +1148,15 @@ class _MessageListState extends State<MessageList> with PerAccountStoreAwareStat
       // TODO(#311) If we have a bottom nav, it will pad the bottom inset,
       //   and this can be removed; also remove mention in MessageList dartdoc
       bottomSliver = SliverSafeArea(key: bottomSliver.key, sliver: bottomSliver);
+      topSliver = MediaQuery.removePadding(context: context,
+        // In the top sliver, forget the bottom inset;
+        // we're having the bottom sliver take care of it.
+        removeBottom: true,
+        // (Also forget the left and right insets; the outer SafeArea, above,
+        // does that, but the `context` we're passing to this `removePadding`
+        // is from outside that SafeArea, so we need to repeat it.)
+        removeLeft: true, removeRight: true,
+        child: topSliver);
     }
 
     return MessageListScrollView(
@@ -1841,8 +1875,14 @@ class DateText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final store = PerAccountStoreWidget.of(context);
     final messageListTheme = MessageListTheme.of(context);
     final zulipLocalizations = ZulipLocalizations.of(context);
+    final formattedTimestamp = MessageTimestampStyle.dateOnlyRelative.format(
+      timestamp,
+      now: ZulipBinding.instance.utcNow().toLocal(),
+      twentyFourHourTimeMode: store.userSettings.twentyFourHourTime,
+      zulipLocalizations: zulipLocalizations)!;
     return Text(
       style: TextStyle(
         color: messageListTheme.labelTime,
@@ -1852,46 +1892,7 @@ class DateText extends StatelessWidget {
         //   https://developer.mozilla.org/en-US/docs/Web/CSS/font-variant-caps#all-small-caps
         fontFeatures: const [FontFeature.enable('c2sc'), FontFeature.enable('smcp')],
       ),
-      formatHeaderDate(
-        zulipLocalizations,
-        DateTime.fromMillisecondsSinceEpoch(timestamp * 1000),
-        now: DateTime.now()));
-  }
-}
-
-@visibleForTesting
-String formatHeaderDate(
-  ZulipLocalizations zulipLocalizations,
-  DateTime dateTime, {
-  required DateTime now,
-}) {
-  assert(!dateTime.isUtc && !now.isUtc,
-    '`dateTime` and `now` need to be in local time.');
-
-  if (dateTime.year == now.year &&
-      dateTime.month == now.month &&
-      dateTime.day == now.day) {
-    return zulipLocalizations.today;
-  }
-
-  final yesterday = now
-    .copyWith(hour: 12, minute: 0, second: 0, millisecond: 0, microsecond: 0)
-    .add(const Duration(days: -1));
-  if (dateTime.year == yesterday.year &&
-      dateTime.month == yesterday.month &&
-      dateTime.day == yesterday.day) {
-    return zulipLocalizations.yesterday;
-  }
-
-  // If it is Dec 1 and you see a label that says `Dec 2`
-  // it could be misinterpreted as Dec 2 of the previous
-  // year. For times in the future, those still on the
-  // current day will show as today (handled above) and
-  // any dates beyond that show up with the year.
-  if (dateTime.year == now.year && dateTime.isBefore(now)) {
-    return DateFormat.MMMd().format(dateTime);
-  } else {
-    return DateFormat.yMMMd().format(dateTime);
+      formattedTimestamp);
   }
 }
 
@@ -1916,12 +1917,17 @@ class SenderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final zulipLocalizations = ZulipLocalizations.of(context);
     final store = PerAccountStoreWidget.of(context);
     final messageListTheme = MessageListTheme.of(context);
     final designVariables = DesignVariables.of(context);
 
     final sender = store.getUser(message.senderId);
-    final timestamp = timestampStyle.format(message.timestamp);
+    final timestamp = timestampStyle
+      .format(message.timestamp,
+        now: DateTime.now(),
+        twentyFourHourTimeMode: store.userSettings.twentyFourHourTime,
+        zulipLocalizations: zulipLocalizations);
 
     final showAsMuted = _showAsMuted(context, store);
 
@@ -1958,6 +1964,8 @@ class SenderRow extends StatelessWidget {
                           : designVariables.title,
                       ).merge(weightVariableTextStyle(context, wght: 600)),
                       overflow: TextOverflow.ellipsis)),
+                  UserStatusEmoji(userId: message.senderId, size: 18,
+                    padding: const EdgeInsetsDirectional.only(start: 5.0)),
                   if (sender?.isBot ?? false) ...[
                     const SizedBox(width: 5),
                     Icon(
@@ -1981,10 +1989,13 @@ class SenderRow extends StatelessWidget {
   }
 }
 
-// TODO centralize on this for wherever we show message timestamps
 enum MessageTimestampStyle {
   none,
+  dateOnlyRelative,
   timeOnly,
+
+  // TODO(#45): E.g. "Yesterday at 4:47 PM"; see details in #45
+  lightbox,
 
   /// The longest format, with full date and time as numbers, not "Today"/etc.
   ///
@@ -2000,19 +2011,88 @@ enum MessageTimestampStyle {
   full,
   ;
 
-  static final _timeOnlyFormat = DateFormat('h:mm aa', 'en_US');
-  static final _fullFormat = DateFormat.yMMMd().add_jm();
+  static String _formatDateOnlyRelative(
+    DateTime dateTime, {
+    required DateTime now,
+    required ZulipLocalizations zulipLocalizations,
+  }) {
+    assert(!dateTime.isUtc && !now.isUtc,
+      '`dateTime` and `now` need to be in local time.');
+
+    if (dateTime.year == now.year &&
+        dateTime.month == now.month &&
+        dateTime.day == now.day) {
+      return zulipLocalizations.today;
+    }
+
+    final yesterday = now
+      .copyWith(hour: 12, minute: 0, second: 0, millisecond: 0, microsecond: 0)
+      .add(const Duration(days: -1));
+    if (dateTime.year == yesterday.year &&
+        dateTime.month == yesterday.month &&
+        dateTime.day == yesterday.day) {
+      return zulipLocalizations.yesterday;
+    }
+
+    // If it is Dec 1 and you see a label that says `Dec 2`
+    // it could be misinterpreted as Dec 2 of the previous
+    // year. For times in the future, those still on the
+    // current day will show as today (handled above) and
+    // any dates beyond that show up with the year.
+    if (dateTime.year == now.year && dateTime.isBefore(now)) {
+      return DateFormat.MMMd().format(dateTime);
+    } else {
+      return DateFormat.yMMMd().format(dateTime);
+    }
+  }
+
+  static final _timeFormat12 =                       DateFormat('h:mm aa');
+  static final _timeFormat24 =                       DateFormat('Hm');
+  static final _timeFormatLocaleDefault =            DateFormat('jm');
+  static final _timeFormat12WithSeconds =            DateFormat('h:mm:ss aa');
+  static final _timeFormat24WithSeconds =            DateFormat('Hms');
+  static final _timeFormatLocaleDefaultWithSeconds = DateFormat('jms');
+
+  static DateFormat _resolveTimeFormat(TwentyFourHourTimeMode mode) => switch (mode) {
+    TwentyFourHourTimeMode.twelveHour => _timeFormat12,
+    TwentyFourHourTimeMode.twentyFourHour => _timeFormat24,
+    TwentyFourHourTimeMode.localeDefault => _timeFormatLocaleDefault,
+  };
+
+  static DateFormat _resolveTimeFormatWithSeconds(TwentyFourHourTimeMode mode) => switch (mode) {
+    TwentyFourHourTimeMode.twelveHour => _timeFormat12WithSeconds,
+    TwentyFourHourTimeMode.twentyFourHour => _timeFormat24WithSeconds,
+    TwentyFourHourTimeMode.localeDefault => _timeFormatLocaleDefaultWithSeconds,
+  };
 
   /// Format a [Message.timestamp] for this mode.
   // TODO(i18n): locale-specific formatting (see #45 for a plan with ffi)
-  String? format(int messageTimestamp) {
+  String? format(
+    int messageTimestamp, {
+    required DateTime now,
+    required ZulipLocalizations zulipLocalizations,
+    required TwentyFourHourTimeMode twentyFourHourTimeMode,
+  }) {
     final asDateTime =
       DateTime.fromMillisecondsSinceEpoch(1000 * messageTimestamp);
 
     switch (this) {
       case none:     return null;
-      case timeOnly: return _timeOnlyFormat.format(asDateTime);
-      case full: return _fullFormat.format(asDateTime);
+      case dateOnlyRelative:
+        return _formatDateOnlyRelative(asDateTime,
+          now: now, zulipLocalizations: zulipLocalizations);
+      case timeOnly:
+        return _resolveTimeFormat(twentyFourHourTimeMode).format(asDateTime);
+      case lightbox:
+        return DateFormat
+          .yMMMd()
+          .addPattern(_resolveTimeFormatWithSeconds(twentyFourHourTimeMode).pattern)
+          .format(asDateTime);
+      case full:
+        return DateFormat
+          .yMMMd()
+          .addPattern(_resolveTimeFormat(twentyFourHourTimeMode).pattern)
+          .format(asDateTime);
     }
   }
 }

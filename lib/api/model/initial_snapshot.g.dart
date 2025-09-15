@@ -15,17 +15,13 @@ InitialSnapshot _$InitialSnapshotFromJson(
   lastEventId: (json['last_event_id'] as num).toInt(),
   zulipFeatureLevel: (json['zulip_feature_level'] as num).toInt(),
   zulipVersion: json['zulip_version'] as String,
-  zulipMergeBase: json['zulip_merge_base'] as String?,
+  zulipMergeBase: json['zulip_merge_base'] as String,
   alertWords: (json['alert_words'] as List<dynamic>)
       .map((e) => e as String)
       .toList(),
   customProfileFields: (json['custom_profile_fields'] as List<dynamic>)
       .map((e) => CustomProfileField.fromJson(e as Map<String, dynamic>))
       .toList(),
-  emailAddressVisibility: $enumDecodeNullable(
-    _$EmailAddressVisibilityEnumMap,
-    json['email_address_visibility'],
-  ),
   serverPresencePingIntervalSeconds:
       (json['server_presence_ping_interval_seconds'] as num).toInt(),
   serverPresenceOfflineThresholdSeconds:
@@ -85,6 +81,18 @@ InitialSnapshot _$InitialSnapshotFromJson(
   userTopics: (json['user_topics'] as List<dynamic>?)
       ?.map((e) => UserTopicItem.fromJson(e as Map<String, dynamic>))
       .toList(),
+  realmCanDeleteAnyMessageGroup:
+      json['realm_can_delete_any_message_group'] == null
+      ? null
+      : GroupSettingValue.fromJson(json['realm_can_delete_any_message_group']),
+  realmCanDeleteOwnMessageGroup:
+      json['realm_can_delete_own_message_group'] == null
+      ? null
+      : GroupSettingValue.fromJson(json['realm_can_delete_own_message_group']),
+  realmDeleteOwnMessagePolicy: $enumDecodeNullable(
+    _$RealmDeleteOwnMessagePolicyEnumMap,
+    json['realm_delete_own_message_policy'],
+  ),
   realmWildcardMentionPolicy: $enumDecode(
     _$RealmWildcardMentionPolicyEnumMap,
     json['realm_wildcard_mention_policy'],
@@ -92,9 +100,12 @@ InitialSnapshot _$InitialSnapshotFromJson(
   realmMandatoryTopics: json['realm_mandatory_topics'] as bool,
   realmWaitingPeriodThreshold: (json['realm_waiting_period_threshold'] as num)
       .toInt(),
+  realmMessageContentDeleteLimitSeconds:
+      (json['realm_message_content_delete_limit_seconds'] as num?)?.toInt(),
   realmAllowMessageEditing: json['realm_allow_message_editing'] as bool,
   realmMessageContentEditLimitSeconds:
       (json['realm_message_content_edit_limit_seconds'] as num?)?.toInt(),
+  realmEnableReadReceipts: json['realm_enable_read_receipts'] as bool,
   realmPresenceDisabled: json['realm_presence_disabled'] as bool,
   realmDefaultExternalAccounts:
       (json['realm_default_external_accounts'] as Map<String, dynamic>).map(
@@ -138,8 +149,6 @@ Map<String, dynamic> _$InitialSnapshotToJson(
   'zulip_merge_base': instance.zulipMergeBase,
   'alert_words': instance.alertWords,
   'custom_profile_fields': instance.customProfileFields,
-  'email_address_visibility':
-      _$EmailAddressVisibilityEnumMap[instance.emailAddressVisibility],
   'server_presence_ping_interval_seconds':
       instance.serverPresencePingIntervalSeconds,
   'server_presence_offline_threshold_seconds':
@@ -162,12 +171,18 @@ Map<String, dynamic> _$InitialSnapshotToJson(
   'user_status': instance.userStatuses.map((k, e) => MapEntry(k.toString(), e)),
   'user_settings': instance.userSettings,
   'user_topics': instance.userTopics,
+  'realm_can_delete_any_message_group': instance.realmCanDeleteAnyMessageGroup,
+  'realm_can_delete_own_message_group': instance.realmCanDeleteOwnMessageGroup,
+  'realm_delete_own_message_policy': instance.realmDeleteOwnMessagePolicy,
   'realm_wildcard_mention_policy': instance.realmWildcardMentionPolicy,
   'realm_mandatory_topics': instance.realmMandatoryTopics,
   'realm_waiting_period_threshold': instance.realmWaitingPeriodThreshold,
+  'realm_message_content_delete_limit_seconds':
+      instance.realmMessageContentDeleteLimitSeconds,
   'realm_allow_message_editing': instance.realmAllowMessageEditing,
   'realm_message_content_edit_limit_seconds':
       instance.realmMessageContentEditLimitSeconds,
+  'realm_enable_read_receipts': instance.realmEnableReadReceipts,
   'realm_presence_disabled': instance.realmPresenceDisabled,
   'realm_default_external_accounts': instance.realmDefaultExternalAccounts,
   'max_file_upload_size_mib': instance.maxFileUploadSizeMib,
@@ -178,12 +193,12 @@ Map<String, dynamic> _$InitialSnapshotToJson(
   'cross_realm_bots': instance.crossRealmBots,
 };
 
-const _$EmailAddressVisibilityEnumMap = {
-  EmailAddressVisibility.everyone: 1,
-  EmailAddressVisibility.members: 2,
-  EmailAddressVisibility.admins: 3,
-  EmailAddressVisibility.nobody: 4,
-  EmailAddressVisibility.moderators: 5,
+const _$RealmDeleteOwnMessagePolicyEnumMap = {
+  RealmDeleteOwnMessagePolicy.members: 1,
+  RealmDeleteOwnMessagePolicy.admins: 2,
+  RealmDeleteOwnMessagePolicy.fullMembers: 3,
+  RealmDeleteOwnMessagePolicy.moderators: 4,
+  RealmDeleteOwnMessagePolicy.everyone: 5,
 };
 
 const _$RealmWildcardMentionPolicyEnumMap = {
@@ -230,7 +245,9 @@ Map<String, dynamic> _$RecentDmConversationToJson(
 };
 
 UserSettings _$UserSettingsFromJson(Map<String, dynamic> json) => UserSettings(
-  twentyFourHourTime: json['twenty_four_hour_time'] as bool,
+  twentyFourHourTime: TwentyFourHourTimeMode.fromApiValue(
+    json['twenty_four_hour_time'] as bool?,
+  ),
   displayEmojiReactionUsers: json['display_emoji_reaction_users'] as bool?,
   emojiset: $enumDecode(_$EmojisetEnumMap, json['emojiset']),
   presenceEnabled: json['presence_enabled'] as bool,
@@ -245,7 +262,9 @@ const _$UserSettingsFieldMap = <String, String>{
 
 Map<String, dynamic> _$UserSettingsToJson(UserSettings instance) =>
     <String, dynamic>{
-      'twenty_four_hour_time': instance.twentyFourHourTime,
+      'twenty_four_hour_time': TwentyFourHourTimeMode.staticToJson(
+        instance.twentyFourHourTime,
+      ),
       'display_emoji_reaction_users': instance.displayEmojiReactionUsers,
       'emojiset': instance.emojiset,
       'presence_enabled': instance.presenceEnabled,
@@ -318,9 +337,7 @@ Map<String, dynamic> _$UnreadMessagesSnapshotToJson(
 
 UnreadDmSnapshot _$UnreadDmSnapshotFromJson(Map<String, dynamic> json) =>
     UnreadDmSnapshot(
-      otherUserId:
-          (UnreadDmSnapshot._readOtherUserId(json, 'other_user_id') as num)
-              .toInt(),
+      otherUserId: (json['other_user_id'] as num).toInt(),
       unreadMessageIds: (json['unread_message_ids'] as List<dynamic>)
           .map((e) => (e as num).toInt())
           .toList(),
@@ -365,3 +382,38 @@ Map<String, dynamic> _$UnreadHuddleSnapshotToJson(
   'user_ids_string': instance.userIdsString,
   'unread_message_ids': instance.unreadMessageIds,
 };
+
+SupportedPermissionSettings _$SupportedPermissionSettingsFromJson(
+  Map<String, dynamic> json,
+) => SupportedPermissionSettings(
+  realm: (json['realm'] as Map<String, dynamic>).map(
+    (k, e) =>
+        MapEntry(k, PermissionSettingsItem.fromJson(e as Map<String, dynamic>)),
+  ),
+  stream: (json['stream'] as Map<String, dynamic>).map(
+    (k, e) =>
+        MapEntry(k, PermissionSettingsItem.fromJson(e as Map<String, dynamic>)),
+  ),
+  group: (json['group'] as Map<String, dynamic>).map(
+    (k, e) =>
+        MapEntry(k, PermissionSettingsItem.fromJson(e as Map<String, dynamic>)),
+  ),
+);
+
+Map<String, dynamic> _$SupportedPermissionSettingsToJson(
+  SupportedPermissionSettings instance,
+) => <String, dynamic>{
+  'realm': instance.realm,
+  'stream': instance.stream,
+  'group': instance.group,
+};
+
+PermissionSettingsItem _$PermissionSettingsItemFromJson(
+  Map<String, dynamic> json,
+) => PermissionSettingsItem(
+  allowEveryoneGroup: json['allow_everyone_group'] as bool,
+);
+
+Map<String, dynamic> _$PermissionSettingsItemToJson(
+  PermissionSettingsItem instance,
+) => <String, dynamic>{'allow_everyone_group': instance.allowEveryoneGroup};

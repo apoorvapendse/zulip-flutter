@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:test/fake.dart';
 import 'package:url_launcher/url_launcher.dart' as url_launcher;
+import 'package:zulip/host/android_intents.dart';
 import 'package:zulip/host/android_notifications.dart';
 import 'package:zulip/host/notifications.dart';
 import 'package:zulip/model/binding.dart';
@@ -419,10 +420,14 @@ class TestZulipBinding extends ZulipBinding {
   Future<void> toggleWakelock({required bool enable}) async {
     _wakelockEnabled = enable;
   }
+
+  @override
+  // TODO(#1787) implement androidIntentEvents and write related tests
+  Stream<AndroidIntentEvent> get androidIntentEvents => throw UnimplementedError();
 }
 
 class FakeFirebaseMessaging extends Fake implements FirebaseMessaging {
-  ////////////////////////////////
+  //|//////////////////////////////
   // Permissions.
 
   NotificationSettings requestPermissionResult = const NotificationSettings(
@@ -471,7 +476,7 @@ class FakeFirebaseMessaging extends Fake implements FirebaseMessaging {
     return requestPermissionResult;
   }
 
-  ////////////////////////////////
+  //|//////////////////////////////
   // Tokens.
 
   String? _initialToken;
@@ -527,7 +532,7 @@ class FakeFirebaseMessaging extends Fake implements FirebaseMessaging {
     }
   }
 
-  ////////////////////////////////
+  //|//////////////////////////////
   // Messages.
 
   StreamController<RemoteMessage> onMessage = StreamController.broadcast();

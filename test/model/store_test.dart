@@ -13,11 +13,11 @@ import 'package:zulip/api/model/events.dart';
 import 'package:zulip/api/model/initial_snapshot.dart';
 import 'package:zulip/api/model/model.dart';
 import 'package:zulip/api/route/events.dart';
-import 'package:zulip/api/route/messages.dart';
 import 'package:zulip/api/route/realm.dart';
 import 'package:zulip/log.dart';
 import 'package:zulip/model/actions.dart';
 import 'package:zulip/model/presence.dart';
+import 'package:zulip/model/server_support.dart';
 import 'package:zulip/model/store.dart';
 import 'package:zulip/notifications/receive.dart';
 
@@ -47,7 +47,7 @@ void main() {
     final store1 = PerAccountStore.fromInitialSnapshot(
       globalStore: globalStore,
       accountId: 1,
-      initialSnapshot: eg.initialSnapshot(),
+      initialSnapshot: eg.initialSnapshot(realmUsers: [eg.selfUser]),
     );
     completers(1).single.complete(store1);
     check(await future1).identicalTo(store1);
@@ -58,7 +58,7 @@ void main() {
     final store2 = PerAccountStore.fromInitialSnapshot(
       globalStore: globalStore,
       accountId: 2,
-      initialSnapshot: eg.initialSnapshot(),
+      initialSnapshot: eg.initialSnapshot(realmUsers: [eg.otherUser]),
     );
     completers(2).single.complete(store2);
     check(await future2).identicalTo(store2);
@@ -85,12 +85,12 @@ void main() {
     final store1 = PerAccountStore.fromInitialSnapshot(
       globalStore: globalStore,
       accountId: 1,
-      initialSnapshot: eg.initialSnapshot(),
+      initialSnapshot: eg.initialSnapshot(realmUsers: [eg.selfUser]),
     );
     final store2 = PerAccountStore.fromInitialSnapshot(
       globalStore: globalStore,
       accountId: 2,
-      initialSnapshot: eg.initialSnapshot(),
+      initialSnapshot: eg.initialSnapshot(realmUsers: [eg.otherUser]),
     );
     completers(1).single.complete(store1);
     completers(2).single.complete(store2);
@@ -465,133 +465,10 @@ void main() {
     });
   });
 
-  group('PerAccountStore.hasPassedWaitingPeriod', () {
-    final store = eg.store(initialSnapshot:
-      eg.initialSnapshot(realmWaitingPeriodThreshold: 2));
-
-    final testCases = [
-      ('2024-11-25T10:00+00:00', DateTime.utc(2024, 11, 25 + 0, 10, 00), false),
-      ('2024-11-25T10:00+00:00', DateTime.utc(2024, 11, 25 + 1, 10, 00), false),
-      ('2024-11-25T10:00+00:00', DateTime.utc(2024, 11, 25 + 2, 09, 59), false),
-      ('2024-11-25T10:00+00:00', DateTime.utc(2024, 11, 25 + 2, 10, 00), true),
-      ('2024-11-25T10:00+00:00', DateTime.utc(2024, 11, 25 + 1000, 07, 00), true),
-    ];
-
-    for (final (String dateJoined, DateTime currentDate, bool hasPassedWaitingPeriod) in testCases) {
-      test('user joined at $dateJoined ${hasPassedWaitingPeriod ? 'has' : "hasn't"} '
-          'passed waiting period by $currentDate', () {
-        final user = eg.user(dateJoined: dateJoined);
-        check(store.hasPassedWaitingPeriod(user, byDate: currentDate))
-          .equals(hasPassedWaitingPeriod);
-      });
-    }
-  });
-
-  group('PerAccountStore.hasPostingPermission', () {
-    final testCases = [
-      (ChannelPostPolicy.unknown,        UserRole.unknown,       true),
-      (ChannelPostPolicy.unknown,        UserRole.guest,         true),
-      (ChannelPostPolicy.unknown,        UserRole.member,        true),
-      (ChannelPostPolicy.unknown,        UserRole.moderator,     true),
-      (ChannelPostPolicy.unknown,        UserRole.administrator, true),
-      (ChannelPostPolicy.unknown,        UserRole.owner,         true),
-      (ChannelPostPolicy.any,            UserRole.unknown,       true),
-      (ChannelPostPolicy.any,            UserRole.guest,         true),
-      (ChannelPostPolicy.any,            UserRole.member,        true),
-      (ChannelPostPolicy.any,            UserRole.moderator,     true),
-      (ChannelPostPolicy.any,            UserRole.administrator, true),
-      (ChannelPostPolicy.any,            UserRole.owner,         true),
-      (ChannelPostPolicy.fullMembers,    UserRole.unknown,       true),
-      (ChannelPostPolicy.fullMembers,    UserRole.guest,         false),
-      // The fullMembers/member case gets its own tests further below.
-      // (ChannelPostPolicy.fullMembers,    UserRole.member,        /* complicated */),
-      (ChannelPostPolicy.fullMembers,    UserRole.moderator,     true),
-      (ChannelPostPolicy.fullMembers,    UserRole.administrator, true),
-      (ChannelPostPolicy.fullMembers,    UserRole.owner,         true),
-      (ChannelPostPolicy.moderators,     UserRole.unknown,       true),
-      (ChannelPostPolicy.moderators,     UserRole.guest,         false),
-      (ChannelPostPolicy.moderators,     UserRole.member,        false),
-      (ChannelPostPolicy.moderators,     UserRole.moderator,     true),
-      (ChannelPostPolicy.moderators,     UserRole.administrator, true),
-      (ChannelPostPolicy.moderators,     UserRole.owner,         true),
-      (ChannelPostPolicy.administrators, UserRole.unknown,       true),
-      (ChannelPostPolicy.administrators, UserRole.guest,         false),
-      (ChannelPostPolicy.administrators, UserRole.member,        false),
-      (ChannelPostPolicy.administrators, UserRole.moderator,     false),
-      (ChannelPostPolicy.administrators, UserRole.administrator, true),
-      (ChannelPostPolicy.administrators, UserRole.owner,         true),
-    ];
-
-    for (final (ChannelPostPolicy policy, UserRole role, bool canPost) in testCases) {
-      test('"${role.name}" user ${canPost ? 'can' : "can't"} post in channel '
-          'with "${policy.name}" policy', () {
-        final store = eg.store();
-        final actual = store.hasPostingPermission(
-          inChannel: eg.stream(channelPostPolicy: policy), user: eg.user(role: role),
-          // [byDate] is not actually relevant for these test cases; for the
-          // ones which it is, they're practiced below.
-          byDate: DateTime.now());
-        check(actual).equals(canPost);
-      });
-    }
-
-    group('"member" user posting in a channel with "fullMembers" policy', () {
-      PerAccountStore localStore({required int realmWaitingPeriodThreshold}) =>
-        eg.store(initialSnapshot: eg.initialSnapshot(
-          realmWaitingPeriodThreshold: realmWaitingPeriodThreshold));
-
-      User memberUser({required String dateJoined}) => eg.user(
-        role: UserRole.member, dateJoined: dateJoined);
-
-      test('a "full" member -> can post in the channel', () {
-        final store = localStore(realmWaitingPeriodThreshold: 3);
-        final hasPermission = store.hasPostingPermission(
-          inChannel: eg.stream(channelPostPolicy: ChannelPostPolicy.fullMembers),
-          user: memberUser(dateJoined: '2024-11-25T10:00+00:00'),
-          byDate: DateTime.utc(2024, 11, 28, 10, 00));
-        check(hasPermission).isTrue();
-      });
-
-      test('not a "full" member -> cannot post in the channel', () {
-        final store = localStore(realmWaitingPeriodThreshold: 3);
-        final actual = store.hasPostingPermission(
-          inChannel: eg.stream(channelPostPolicy: ChannelPostPolicy.fullMembers),
-          user: memberUser(dateJoined: '2024-11-25T10:00+00:00'),
-          byDate: DateTime.utc(2024, 11, 28, 09, 59));
-        check(actual).isFalse();
-      });
-    });
-  });
-
   group('PerAccountStore.handleEvent', () {
     // Mostly this method just dispatches to ChannelStore and MessageStore etc.,
     // and so its tests generally live in the test files for those
     // (but they call the handleEvent method because it's the entry point).
-  });
-
-  group('PerAccountStore.sendMessage', () {
-    test('smoke', () async {
-      final store = eg.store(initialSnapshot: eg.initialSnapshot(
-        queueId: 'fb67bf8a-c031-47cc-84cf-ed80accacda8'));
-      final connection = store.connection as FakeApiConnection;
-      final stream = eg.stream();
-      connection.prepare(json: SendMessageResult(id: 12345).toJson());
-      await store.sendMessage(
-        destination: StreamDestination(stream.streamId, eg.t('world')),
-        content: 'hello');
-      check(connection.takeRequests()).single.isA<http.Request>()
-        ..method.equals('POST')
-        ..url.path.equals('/api/v1/messages')
-        ..bodyFields.deepEquals({
-          'type': 'stream',
-          'to': stream.streamId.toString(),
-          'topic': 'world',
-          'content': 'hello',
-          'read_by_sender': 'true',
-          'queue_id': 'fb67bf8a-c031-47cc-84cf-ed80accacda8',
-          'local_id': store.outboxMessages.keys.single.toString(),
-        });
-    });
   });
 
   group('UpdateMachine.load', () {
@@ -822,14 +699,16 @@ void main() {
       await preparePoll();
 
       // Pick some arbitrary event and check it gets processed on the store.
-      check(store.userSettings.twentyFourHourTime).isFalse();
+      check(store.userSettings.twentyFourHourTime)
+        .equals(TwentyFourHourTimeMode.twelveHour);
       connection.prepare(json: GetEventsResult(events: [
         UserSettingsUpdateEvent(id: 2,
           property: UserSettingName.twentyFourHourTime, value: true),
       ], queueId: null).toJson());
       updateMachine.debugAdvanceLoop();
       async.elapse(Duration.zero);
-      check(store.userSettings.twentyFourHourTime).isTrue();
+      check(store.userSettings.twentyFourHourTime)
+        .equals(TwentyFourHourTimeMode.twentyFourHour);
     }));
 
     void checkReload(FutureOr<void> Function() prepareError, {
@@ -859,14 +738,16 @@ void main() {
         // The new UpdateMachine updates the new store.
         updateMachine.debugPauseLoop();
         updateMachine.poll();
-        check(store.userSettings.twentyFourHourTime).isFalse();
+        check(store.userSettings.twentyFourHourTime)
+          .equals(TwentyFourHourTimeMode.twelveHour);
         connection.prepare(json: GetEventsResult(events: [
           UserSettingsUpdateEvent(id: 2,
             property: UserSettingName.twentyFourHourTime, value: true),
         ], queueId: null).toJson());
         updateMachine.debugAdvanceLoop();
         async.elapse(Duration.zero);
-        check(store.userSettings.twentyFourHourTime).isTrue();
+        check(store.userSettings.twentyFourHourTime)
+          .equals(TwentyFourHourTimeMode.twentyFourHour);
       });
     }
 

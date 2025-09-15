@@ -9,19 +9,19 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
   ZulipLocalizationsAr([String locale = 'ar']) : super(locale);
 
   @override
-  String get aboutPageTitle => 'About Zulip';
+  String get aboutPageTitle => 'عن زوليب';
 
   @override
-  String get aboutPageAppVersion => 'App version';
+  String get aboutPageAppVersion => 'نسخة التطبيق';
 
   @override
-  String get aboutPageOpenSourceLicenses => 'Open-source licenses';
+  String get aboutPageOpenSourceLicenses => '10.0.151.1';
 
   @override
-  String get aboutPageTapToView => 'Tap to view';
+  String get aboutPageTapToView => 'اضغط للعرض';
 
   @override
-  String get upgradeWelcomeDialogTitle => 'Welcome to the new Zulip app!';
+  String get upgradeWelcomeDialogTitle => 'أهلا بك في تطبيق زوليب الجديد !';
 
   @override
   String get upgradeWelcomeDialogMessage =>
@@ -32,16 +32,16 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
       'Check out the announcement blog post!';
 
   @override
-  String get upgradeWelcomeDialogDismiss => 'Let\'s go';
+  String get upgradeWelcomeDialogDismiss => 'هيا بنا';
 
   @override
-  String get chooseAccountPageTitle => 'Choose account';
+  String get chooseAccountPageTitle => 'اختر حساب';
 
   @override
-  String get settingsPageTitle => 'Settings';
+  String get settingsPageTitle => 'الإعدادات';
 
   @override
-  String get switchAccountButton => 'Switch account';
+  String get switchAccountButton => 'تبديل الحساب';
 
   @override
   String tryAnotherAccountMessage(Object url) {
@@ -88,10 +88,40 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
       'To upload files, please grant Zulip additional permissions in Settings.';
 
   @override
+  String get actionSheetOptionSubscribe => 'Subscribe';
+
+  @override
+  String get subscribeFailedTitle => 'Failed to subscribe';
+
+  @override
   String get actionSheetOptionMarkChannelAsRead => 'Mark channel as read';
 
   @override
+  String get actionSheetOptionCopyChannelLink => 'Copy link to channel';
+
+  @override
   String get actionSheetOptionListOfTopics => 'List of topics';
+
+  @override
+  String get actionSheetOptionChannelFeed => 'Channel feed';
+
+  @override
+  String get actionSheetOptionUnsubscribe => 'Unsubscribe';
+
+  @override
+  String unsubscribeConfirmationDialogTitle(String channelName) {
+    return 'Unsubscribe from $channelName?';
+  }
+
+  @override
+  String get unsubscribeConfirmationDialogMessageMaybeCannotResubscribe =>
+      'Once you leave this channel, you might not be able to rejoin.';
+
+  @override
+  String get unsubscribeConfirmationDialogConfirmButton => 'Unsubscribe';
+
+  @override
+  String get unsubscribeFailedTitle => 'Failed to unsubscribe';
 
   @override
   String get actionSheetOptionMuteTopic => 'Mute topic';
@@ -117,6 +147,58 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
   @override
   String get errorUnresolveTopicFailedTitle =>
       'Failed to mark topic as unresolved';
+
+  @override
+  String get actionSheetOptionSeeWhoReacted => 'See who reacted';
+
+  @override
+  String get seeWhoReactedSheetNoReactions => 'This message has no reactions.';
+
+  @override
+  String seeWhoReactedSheetHeaderLabel(int num) {
+    return 'Emoji reactions ($num total)';
+  }
+
+  @override
+  String seeWhoReactedSheetEmojiNameWithVoteCount(String emojiName, int num) {
+    String _temp0 = intl.Intl.pluralLogic(
+      num,
+      locale: localeName,
+      other: '$num votes',
+      one: '1 vote',
+    );
+    return '$emojiName: $_temp0';
+  }
+
+  @override
+  String seeWhoReactedSheetUserListLabel(String emojiName, int num) {
+    return 'Votes for $emojiName ($num)';
+  }
+
+  @override
+  String get actionSheetOptionViewReadReceipts => 'View read receipts';
+
+  @override
+  String get actionSheetReadReceipts => 'Read receipts';
+
+  @override
+  String actionSheetReadReceiptsReadCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'This message has been <z-link>read</z-link> by $count people:',
+      one: 'This message has been <z-link>read</z-link> by $count person:',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get actionSheetReadReceiptsZeroReadCount =>
+      'No one has read this message yet.';
+
+  @override
+  String get actionSheetReadReceiptsErrorReadCount =>
+      'Failed to load read receipts.';
 
   @override
   String get actionSheetOptionCopyMessageText => 'Copy message text';
@@ -147,6 +229,9 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
 
   @override
   String get actionSheetOptionMarkTopicAsRead => 'Mark topic as read';
+
+  @override
+  String get actionSheetOptionCopyTopicLink => 'Copy link to topic';
 
   @override
   String get errorWebAuthOperationalErrorTitle => 'Something went wrong';
@@ -299,6 +384,12 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
 
   @override
   String get successMessageLinkCopied => 'Message link copied';
+
+  @override
+  String get successTopicLinkCopied => 'Topic link copied';
+
+  @override
+  String get successChannelLinkCopied => 'Channel link copied';
 
   @override
   String get errorBannerDeactivatedDmLabel =>
@@ -538,6 +629,13 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
       'Topics are required in this organization.';
 
   @override
+  String get errorContentNotInsertedTitle => 'Content not inserted';
+
+  @override
+  String get errorContentToInsertIsEmpty =>
+      'The file to be inserted is empty or cannot be accessed.';
+
+  @override
   String errorServerVersionUnsupportedMessage(
     String url,
     String zulipVersion,
@@ -636,6 +734,56 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
   String get yesterday => 'Yesterday';
 
   @override
+  String get userActiveNow => 'Active now';
+
+  @override
+  String get userIdle => 'Idle';
+
+  @override
+  String userActiveMinutesAgo(int minutes) {
+    String _temp0 = intl.Intl.pluralLogic(
+      minutes,
+      locale: localeName,
+      other: '$minutes minutes',
+      one: '1 minute',
+    );
+    return 'Active $_temp0 ago';
+  }
+
+  @override
+  String userActiveHoursAgo(int hours) {
+    String _temp0 = intl.Intl.pluralLogic(
+      hours,
+      locale: localeName,
+      other: '$hours hours',
+      one: '1 hour',
+    );
+    return 'Active $_temp0 ago';
+  }
+
+  @override
+  String get userActiveYesterday => 'Active yesterday';
+
+  @override
+  String userActiveDaysAgo(int days) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days days',
+      one: '1 day',
+    );
+    return 'Active $_temp0 ago';
+  }
+
+  @override
+  String userActiveDate(String date) {
+    return 'Active $date';
+  }
+
+  @override
+  String get userNotActiveInYear => 'Not active in the last year';
+
+  @override
   String get invisibleMode => 'Invisible mode';
 
   @override
@@ -663,6 +811,52 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
 
   @override
   String get userRoleUnknown => 'Unknown';
+
+  @override
+  String get statusButtonLabelStatusSet => 'Status';
+
+  @override
+  String get statusButtonLabelStatusUnset => 'Set status';
+
+  @override
+  String get noStatusText => 'No status text';
+
+  @override
+  String get setStatusPageTitle => 'Set status';
+
+  @override
+  String get statusClearButtonLabel => 'Clear';
+
+  @override
+  String get statusSaveButtonLabel => 'Save';
+
+  @override
+  String get statusTextHint => 'Your status';
+
+  @override
+  String get userStatusBusy => 'Busy';
+
+  @override
+  String get userStatusInAMeeting => 'In a meeting';
+
+  @override
+  String get userStatusCommuting => 'Commuting';
+
+  @override
+  String get userStatusOutSick => 'Out sick';
+
+  @override
+  String get userStatusVacationing => 'Vacationing';
+
+  @override
+  String get userStatusWorkingRemotely => 'Working remotely';
+
+  @override
+  String get userStatusAtTheOffice => 'At the office';
+
+  @override
+  String get updateStatusErrorTitle =>
+      'Error updating user status. Please try again.';
 
   @override
   String get searchMessagesPageTitle => 'Search';
@@ -707,6 +901,9 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
       'You are not subscribed to any channels yet.';
 
   @override
+  String get sharePageTitle => 'Share';
+
+  @override
   String get mainMenuMyProfile => 'My profile';
 
   @override
@@ -737,6 +934,25 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
 
   @override
   String get reactedEmojiSelfUser => 'You';
+
+  @override
+  String get reactionChipsLabel => 'Reactions';
+
+  @override
+  String reactionChipLabel(String emojiName, String votes) {
+    return '$emojiName: $votes';
+  }
+
+  @override
+  String reactionChipVotesYouAndOthers(int otherUsersCount) {
+    String _temp0 = intl.Intl.pluralLogic(
+      otherUsersCount,
+      locale: localeName,
+      other: 'You and $otherUsersCount others',
+      one: 'You and 1 other',
+    );
+    return '$_temp0';
+  }
 
   @override
   String onePersonTyping(String typist) {
@@ -870,6 +1086,13 @@ class ZulipLocalizationsAr extends ZulipLocalizations {
 
   @override
   String get errorReactionRemovingFailedTitle => 'Removing reaction failed';
+
+  @override
+  String get errorSharingTitle => 'Failed to share content';
+
+  @override
+  String get errorSharingAccountNotLoggedIn =>
+      'There is no account logged in. Please log in to an account and try again.';
 
   @override
   String get emojiReactionsMore => 'more';

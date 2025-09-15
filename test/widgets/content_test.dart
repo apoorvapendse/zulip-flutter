@@ -3,17 +3,19 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_checks/flutter_checks.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:zulip/api/core.dart';
+import 'package:zulip/api/model/initial_snapshot.dart';
+import 'package:zulip/api/model/model.dart';
 import 'package:zulip/model/content.dart';
 import 'package:zulip/model/narrow.dart';
 import 'package:zulip/model/settings.dart';
 import 'package:zulip/model/store.dart';
 import 'package:zulip/widgets/content.dart';
 import 'package:zulip/widgets/icons.dart';
+import 'package:zulip/widgets/katex.dart';
 import 'package:zulip/widgets/message_list.dart';
 import 'package:zulip/widgets/page.dart';
 import 'package:zulip/widgets/store.dart';
@@ -23,14 +25,11 @@ import '../example_data.dart' as eg;
 import '../flutter_checks.dart';
 import '../model/binding.dart';
 import '../model/content_test.dart';
-import '../model/store_checks.dart';
 import '../model/test_store.dart';
-import '../stdlib_checks.dart';
 import '../test_images.dart';
 import '../test_navigation.dart';
+import 'checks.dart';
 import 'dialog_checks.dart';
-import 'message_list_checks.dart';
-import 'page_checks.dart';
 import 'test_app.dart';
 
 /// Simulate a nested "inner" span's style by merging all ancestor-span
@@ -107,6 +106,44 @@ TextStyle? mergedStyleOf(WidgetTester tester, Pattern spanPattern, {
 /// and reports the target's font size.
 typedef TargetFontSizeFinder = double Function(InlineSpan rootSpan);
 
+Widget plainContent(String html) {
+  return Builder(builder: (context) =>
+    DefaultTextStyle(
+      style: ContentTheme.of(context).textStylePlainParagraph,
+      child: BlockContentList(nodes: parseContent(html).nodes)));
+}
+
+// TODO(#488) For content that we need to show outside a per-message context
+//   or a context without a full PerAccountStore, make sure to include tests
+//   that don't provide such context.
+Future<void> prepareContent(WidgetTester tester, Widget child, {
+  List<NavigatorObserver> navObservers = const [],
+  bool wrapWithPerAccountStoreWidget = false,
+  InitialSnapshot? initialSnapshot,
+}) async {
+  if (wrapWithPerAccountStoreWidget) {
+    initialSnapshot ??= eg.initialSnapshot();
+    await testBinding.globalStore.add(eg.selfAccount, initialSnapshot);
+  } else {
+    assert(initialSnapshot == null);
+  }
+
+  addTearDown(testBinding.reset);
+
+  prepareBoringImageHttpClient();
+
+  await tester.pumpWidget(TestZulipApp(
+    accountId: wrapWithPerAccountStoreWidget ? eg.selfAccount.id : null,
+    navigatorObservers: navObservers,
+    child: child));
+  await tester.pump(); // global store
+  if (wrapWithPerAccountStoreWidget) {
+    await tester.pump();
+  }
+
+  debugNetworkImageHttpClientProvider = null;
+}
+
 void main() {
   // For testing a new content feature:
   //
@@ -121,43 +158,9 @@ void main() {
 
   TestZulipBinding.ensureInitialized();
 
-  Widget plainContent(String html) {
-    return Builder(builder: (context) =>
-      DefaultTextStyle(
-        style: ContentTheme.of(context).textStylePlainParagraph,
-        child: BlockContentList(nodes: parseContent(html).nodes)));
-  }
-
   Widget messageContent(String html) {
     return MessageContent(message: eg.streamMessage(content: html),
        content: parseContent(html));
-  }
-
-  // TODO(#488) For content that we need to show outside a per-message context
-  //   or a context without a full PerAccountStore, make sure to include tests
-  //   that don't provide such context.
-  Future<void> prepareContent(WidgetTester tester, Widget child, {
-    List<NavigatorObserver> navObservers = const [],
-    bool wrapWithPerAccountStoreWidget = false,
-  }) async {
-    if (wrapWithPerAccountStoreWidget) {
-      await testBinding.globalStore.add(eg.selfAccount, eg.initialSnapshot());
-    }
-
-    addTearDown(testBinding.reset);
-
-    prepareBoringImageHttpClient();
-
-    await tester.pumpWidget(TestZulipApp(
-      accountId: wrapWithPerAccountStoreWidget ? eg.selfAccount.id : null,
-      navigatorObservers: navObservers,
-      child: child));
-    await tester.pump(); // global store
-    if (wrapWithPerAccountStoreWidget) {
-      await tester.pump();
-    }
-
-    debugNetworkImageHttpClientProvider = null;
   }
 
   /// Test that the given content example renders without throwing an exception.
@@ -183,11 +186,11 @@ void main() {
   /// [styleFinder] must return the [TextStyle] containing the "wght"
   /// (in [TextStyle.fontVariations]) and the [TextStyle.fontWeight]
   /// to be checked.
-  Future<void> testFontWeight(String description, {
+  void testFontWeight(String description, {
     required Widget content,
     required double expectedWght,
     required TextStyle Function(WidgetTester tester) styleFinder,
-  }) async {
+  }) {
     for (final platformRequestsBold in [false, true]) {
       testWidgets(
         description + (platformRequestsBold ? ' (platform requests bold)' : ''),
@@ -556,115 +559,20 @@ void main() {
   });
 
   group('MathBlock', () {
+    // See also katex_test.dart for detailed tests of
+    // how we render the inside of a math block.
+    // These tests check how it relates to the enclosing Zulip message.
+
     testContentSmoke(ContentExample.mathBlock);
 
-    testWidgets('displays KaTeX source; experimental flag default', (tester) async {
-      await prepareContent(tester, plainContent(ContentExample.mathBlock.html));
-      tester.widget(find.text(r'\lambda', findRichText: true));
-    });
-
-    testWidgets('displays KaTeX content; experimental flag enabled', (tester) async {
-      addTearDown(testBinding.reset);
-      final globalSettings = testBinding.globalStore.settings;
-      await globalSettings.setBool(BoolGlobalSetting.renderKatex, true);
-      check(globalSettings).getBool(BoolGlobalSetting.renderKatex).isTrue();
-
+    testWidgets('displays KaTeX content', (tester) async {
       await prepareContent(tester, plainContent(ContentExample.mathBlock.html));
       tester.widget(find.text('λ', findRichText: true));
     });
 
-    group('characters render at specific offsets with specific size', () {
-      const testCases = <(ContentExample, List<(String, Offset, Size)>, {bool? skip})>[
-        (ContentExample.mathBlockKatexSizing, skip: false, [
-          ('1', Offset(0.00, 2.24), Size(25.59, 61.00)),
-          ('2', Offset(25.59, 10.04), Size(21.33, 51.00)),
-          ('3', Offset(46.91, 16.55), Size(17.77, 43.00)),
-          ('4', Offset(64.68, 21.98), Size(14.80, 36.00)),
-          ('5', Offset(79.48, 26.50), Size(12.34, 30.00)),
-          ('6', Offset(91.82, 30.26), Size(10.28, 25.00)),
-          ('7', Offset(102.10, 32.15), Size(9.25, 22.00)),
-          ('8', Offset(111.35, 34.03), Size(8.23, 20.00)),
-          ('9', Offset(119.58, 35.91), Size(7.20, 17.00)),
-          ('0', Offset(126.77, 39.68), Size(5.14, 12.00)),
-        ]),
-        (ContentExample.mathBlockKatexNestedSizing, skip: false, [
-          ('1', Offset(0.00, 40.24), Size(5.14, 12.00)),
-          ('2', Offset(5.14, 2.80), Size(25.59, 61.00)),
-        ]),
-        (ContentExample.mathBlockKatexDelimSizing, skip: false, [
-          ('(', Offset(8.00, 20.14), Size(9.42, 25.00)),
-          ('[', Offset(17.42, 20.14), Size(9.71, 25.00)),
-          ('⌈', Offset(27.12, 20.14), Size(11.99, 25.00)),
-          ('⌊', Offset(39.11, 20.14), Size(13.14, 25.00)),
-        ]),
-        (ContentExample.mathBlockKatexSpace, skip: false, [
-          ('1', Offset(0.00, 2.24), Size(10.28, 25.00)),
-          (':', Offset(16.00, 2.24), Size(5.72, 25.00)),
-          ('2', Offset(27.43, 2.24), Size(10.28, 25.00)),
-        ]),
-        (ContentExample.mathBlockKatexSuperscript, skip: false, [
-          ('a', Offset(0.00, 5.28), Size(10.88, 25.00)),
-          ('′', Offset(10.88, 1.13), Size(3.96, 17.00)),
-        ]),
-        (ContentExample.mathBlockKatexSubscript, skip: false, [
-          ('x', Offset(0.00, 5.28), Size(11.76, 25.00)),
-          ('n', Offset(11.76, 13.65), Size(8.63, 17.00)),
-        ]),
-        (ContentExample.mathBlockKatexSubSuperScript, skip: false, [
-          ('u', Offset(0.00, 15.65), Size(8.23, 17.00)),
-          ('o', Offset(0.00, 2.07), Size(6.98, 17.00)),
-        ]),
-        (ContentExample.mathBlockKatexRaisebox, skip: false, [
-          ('a', Offset(0.00, 4.16), Size(10.88, 25.00)),
-          ('b', Offset(10.88, -0.66), Size(8.82, 25.00)),
-          ('c', Offset(19.70, 4.16), Size(8.90, 25.00)),
-        ]),
-        (ContentExample.mathBlockKatexNegativeMargin, skip: false, [
-          ('1', Offset(0.00, 3.12), Size(10.28, 25.00)),
-          ('2', Offset(6.85, 3.36), Size(10.28, 25.00)),
-        ]),
-        (ContentExample.mathBlockKatexLogo, skip: false, [
-          ('K', Offset(0.0, 8.64), Size(16.0, 25.0)),
-          ('A', Offset(12.50, 10.85), Size(10.79, 17.0)),
-          ('T', Offset(20.21, 9.36), Size(14.85, 25.0)),
-          ('E', Offset(31.63, 14.52), Size(14.0, 25.0)),
-          ('X', Offset(43.06, 9.85), Size(15.42, 25.0)),
-        ]),
-        (ContentExample.mathBlockKatexNegativeMarginsOnVlistRow, skip: false, [
-          ('X', Offset(0.00, 7.04), Size(17.03, 25.00)),
-          ('n', Offset(17.03, 15.90), Size(8.63, 17.00)),
-        ]),
-      ];
-
-      for (final testCase in testCases) {
-        testWidgets(testCase.$1.description, (tester) async {
-          await _loadKatexFonts();
-
-          addTearDown(testBinding.reset);
-          final globalSettings = testBinding.globalStore.settings;
-          await globalSettings.setBool(BoolGlobalSetting.renderKatex, true);
-          check(globalSettings).getBool(BoolGlobalSetting.renderKatex).isTrue();
-
-          await prepareContent(tester, plainContent(testCase.$1.html));
-
-          final baseRect = tester.getRect(find.byType(KatexWidget));
-
-          for (final characterData in testCase.$2) {
-            final character = characterData.$1;
-            final expectedTopLeftOffset = characterData.$2;
-            final expectedSize = characterData.$3;
-
-            final rect = tester.getRect(find.text(character));
-            final topLeftOffset = rect.topLeft - baseRect.topLeft;
-            final size = rect.size;
-
-            check(topLeftOffset)
-              .within(distance: 0.05, from: expectedTopLeftOffset);
-            check(size)
-              .within(distance: 0.05, from: expectedSize);
-          }
-        }, skip: testCase.skip);
-      }
+    testWidgets('fallback to displaying KaTeX source if unsupported KaTeX HTML', (tester) async {
+      await prepareContent(tester, plainContent(ContentExample.mathBlockUnknown.html));
+      tester.widget(find.text(r'\lambda', findRichText: true));
     });
   });
 
@@ -686,10 +594,12 @@ void main() {
   Future<void> checkFontSizeRatio(WidgetTester tester, {
     required String targetHtml,
     required TargetFontSizeFinder targetFontSizeFinder,
+    bool wrapWithPerAccountStoreWidget = false,
   }) async {
-    await prepareContent(tester, plainContent(
-      '<h1>header-plain $targetHtml</h1>\n'
-      '<p>paragraph-plain $targetHtml</p>'));
+    await prepareContent(tester, wrapWithPerAccountStoreWidget: wrapWithPerAccountStoreWidget,
+      plainContent(
+        '<h1>header-plain $targetHtml</h1>\n'
+        '<p>paragraph-plain $targetHtml</p>'));
 
     final headerRootSpan = tester.renderObject<RenderParagraph>(find.textContaining('header')).text;
     final headerPlainStyle = mergedStyleOfSubstring(headerRootSpan, 'header-plain ');
@@ -797,7 +707,17 @@ void main() {
           '<tbody>\n<tr>\n<td>text</td>\n</tr>\n</tbody>\n'
           '</table>'),
       styleFinder: findWordBold);
+
+    testWidgets('has strike-through line in strike-through', (tester) async {
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/1817
+      await prepareContent(tester,
+        plainContent('<p><del><strong>bold</strong></del></p>'));
+      final style = mergedStyleOf(tester, 'bold');
+      check(style!.decoration).equals(TextDecoration.lineThrough);
+    });
   });
+
+  testContentSmoke(ContentExample.deleted);
 
   testContentSmoke(ContentExample.emphasis);
 
@@ -808,6 +728,22 @@ void main() {
       await checkFontSizeRatio(tester,
         targetHtml: '<code>code</code>',
         targetFontSizeFinder: mkTargetFontSizeFinderFromPattern('code'));
+    });
+
+    testFontWeight('is bold in bold span',
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/1812
+      expectedWght: 600,
+      // **`bold`**
+      content: plainContent('<p><strong><code>bold</code></strong></p>'),
+      styleFinder: (tester) => mergedStyleOf(tester, 'bold')!,
+    );
+
+    testWidgets('is link-colored in link span', (tester) async {
+      // Regression test for: https://github.com/zulip/zulip-flutter/issues/806
+      await prepareContent(tester,
+        plainContent('<p><a href="https://example/"><code>code</code></a></p>'));
+      final style = mergedStyleOf(tester, 'code');
+      check(style!.color).equals(const HSLColor.fromAHSL(1, 200, 1, 0.4).toColor());
     });
   });
 
@@ -1070,17 +1006,24 @@ void main() {
           _ => throw StateError('unexpected platform in test'),
         });
     }, variant: const TargetPlatformVariant({TargetPlatform.android, TargetPlatform.iOS}));
+
+    testWidgets('has strike-through line in strike-through', (tester) async {
+      // Regression test for https://github.com/zulip/zulip-flutter/issues/1818
+      await prepareContent(tester,
+        plainContent('<p><del>foo<span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span>bar</del></p>'));
+      final style = mergedStyleOf(tester, '\u{1f44d}');
+      check(style!.decoration).equals(TextDecoration.lineThrough);
+    });
   });
 
   group('inline math', () {
+    // See also katex_test.dart for detailed tests of
+    // how we render the inside of a math span.
+    // These tests check how it relates to the enclosing Zulip message.
+
     testContentSmoke(ContentExample.mathInline);
 
     testWidgets('maintains font-size ratio with surrounding text', (tester) async {
-      addTearDown(testBinding.reset);
-      final globalSettings = testBinding.globalStore.settings;
-      await globalSettings.setBool(BoolGlobalSetting.renderKatex, true);
-      check(globalSettings.getBool(BoolGlobalSetting.renderKatex)).isTrue();
-
       const html = '<span class="katex">'
         '<span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>λ</mi></mrow>'
           '<annotation encoding="application/x-tex"> \\lambda </annotation></semantics></math></span>'
@@ -1101,29 +1044,35 @@ void main() {
         });
     });
 
-    testWidgets('maintains font-size ratio with surrounding text, when showing TeX source', (tester) async {
-      const html = '<span class="katex">'
-        '<span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>λ</mi></mrow>'
-          '<annotation encoding="application/x-tex"> \\lambda </annotation></semantics></math></span>'
-        '<span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">λ</span></span></span></span>';
-      await checkFontSizeRatio(tester,
-        targetHtml: html,
-        targetFontSizeFinder: mkTargetFontSizeFinderFromPattern(r'\lambda'));
-    });
+    group('fallback to displaying KaTeX source if unsupported KaTeX HTML', () {
+      testContentSmoke(ContentExample.mathInlineUnknown);
 
-    testWidgets('displays KaTeX source; experimental flag default', (tester) async {
-      await prepareContent(tester, plainContent(ContentExample.mathInline.html));
-      tester.widget(find.text(r'\lambda', findRichText: true));
-    });
+      assert(ContentExample.mathInlineUnknown.html.startsWith('<p>'));
+      assert(ContentExample.mathInlineUnknown.html.endsWith('</p>'));
+      final unsupportedKatexHtml = ContentExample.mathInlineUnknown.html
+        .substring(3, ContentExample.mathInlineUnknown.html.length - 4);
+      final expectedText = ContentExample.mathInlineUnknown.expectedText!;
 
-    testWidgets('displays KaTeX content; experimental flag enabled', (tester) async {
-      addTearDown(testBinding.reset);
-      final globalSettings = testBinding.globalStore.settings;
-      await globalSettings.setBool(BoolGlobalSetting.renderKatex, true);
-      check(globalSettings.getBool(BoolGlobalSetting.renderKatex)).isTrue();
+      testWidgets('maintains font-size ratio with surrounding text, when falling back to TeX source', (tester) async {
+        await checkFontSizeRatio(tester,
+          targetHtml: unsupportedKatexHtml,
+          targetFontSizeFinder: mkTargetFontSizeFinderFromPattern(expectedText));
+      });
 
-      await prepareContent(tester, plainContent(ContentExample.mathInline.html));
-      tester.widget(find.text('λ', findRichText: true));
+      testFontWeight('is bold in bold span',
+        // Regression test for: https://github.com/zulip/zulip-flutter/issues/1812
+        expectedWght: 600,
+        content: plainContent('<p><strong>$unsupportedKatexHtml</strong></p>'),
+        styleFinder: (tester) => mergedStyleOf(tester, expectedText)!,
+      );
+
+      testWidgets('is link-colored in link span', (tester) async {
+        // Regression test for: https://github.com/zulip/zulip-flutter/issues/806
+        await prepareContent(tester,
+          plainContent('<p><a href="https://example/">$unsupportedKatexHtml</a></p>'));
+        final style = mergedStyleOf(tester, expectedText);
+        check(style!.color).equals(const HSLColor.fromAHSL(1, 200, 1, 0.4).toColor());
+      });
     });
   });
 
@@ -1134,16 +1083,52 @@ void main() {
     // the timezone of the environment running these tests. Accept here a wide
     // range of times. See comments in "show dates" test in
     // `test/widgets/message_list_test.dart`.
-    final renderedTextRegexp = RegExp(r'^(Tue, Jan 30|Wed, Jan 31), 2024, \d+:\d\d [AP]M$');
+    final renderedTextRegexp = RegExp(r'^(Tue, Jan 30|Wed, Jan 31), 2024, \d+:\d\d(?: [AP]M)?$');
+    final renderedTextRegexpTwelveHour = RegExp(r'^(Tue, Jan 30|Wed, Jan 31), 2024, \d+:\d\d [AP]M$');
+    final renderedTextRegexpTwentyFourHour = RegExp(r'^(Tue, Jan 30|Wed, Jan 31), 2024, \d+:\d\d$');
+
+    Future<void> prepare(
+      WidgetTester tester,
+      [TwentyFourHourTimeMode twentyFourHourTimeMode = TwentyFourHourTimeMode.localeDefault]
+    ) async {
+      final initialSnapshot = eg.initialSnapshot()
+        ..userSettings.twentyFourHourTime = twentyFourHourTimeMode;
+      await prepareContent(tester,
+        // We use the self-account's time-format setting.
+        wrapWithPerAccountStoreWidget: true,
+        initialSnapshot: initialSnapshot,
+        plainContent('<p>$timeSpanHtml</p>'));
+    }
 
     testWidgets('smoke', (tester) async {
-      await prepareContent(tester, plainContent('<p>$timeSpanHtml</p>'));
+      await prepare(tester);
       tester.widget(find.textContaining(renderedTextRegexp));
+    });
+
+    testWidgets('TwentyFourHourTimeMode.twelveHour', (tester) async {
+      await prepare(tester, TwentyFourHourTimeMode.twelveHour);
+      check(find.textContaining(renderedTextRegexpTwelveHour)).findsOne();
+    });
+
+    testWidgets('TwentyFourHourTimeMode.twentyFourHour', (tester) async {
+      await prepare(tester, TwentyFourHourTimeMode.twentyFourHour);
+      check(find.textContaining(renderedTextRegexpTwentyFourHour)).findsOne();
+    });
+
+    testWidgets('TwentyFourHourTimeMode.localeDefault', (tester) async {
+      await prepare(tester, TwentyFourHourTimeMode.localeDefault);
+      // This expectation holds as long as we're always formatting in en_US,
+      // the default locale, which uses the twelve-hour format.
+      // TODO(#1727) follow the actual locale; test with different locales
+      check(find.textContaining(renderedTextRegexpTwelveHour)).findsOne();
     });
 
     void testIconAndTextSameColor(String description, String html) {
       testWidgets('clock icon and text are the same color: $description', (tester) async {
-        await prepareContent(tester, plainContent(html));
+        await prepareContent(tester,
+          // We use the self-account's time-format setting.
+          wrapWithPerAccountStoreWidget: true,
+          plainContent(html));
 
         final icon = tester.widget<Icon>(
           find.descendant(of: find.byType(GlobalTime),
@@ -1163,6 +1148,8 @@ void main() {
     group('maintains font-size ratio with surrounding text', () {
       Future<void> doCheck(WidgetTester tester, double Function(GlobalTime widget) sizeFromWidget) async {
         await checkFontSizeRatio(tester,
+          // We use the self-account's time-format setting.
+          wrapWithPerAccountStoreWidget: true,
           targetHtml: '<time datetime="2024-01-30T17:33:00Z">2024-01-30T17:33:00Z</time>',
           targetFontSizeFinder: (rootSpan) {
             late final double result;
@@ -1346,69 +1333,6 @@ void main() {
     });
   });
 
-  group('AvatarImage', () {
-    late PerAccountStore store;
-
-    Future<Uri?> actualUrl(WidgetTester tester, String avatarUrl, [double? size]) async {
-      addTearDown(testBinding.reset);
-      await testBinding.globalStore.add(eg.selfAccount, eg.initialSnapshot());
-      store = await testBinding.globalStore.perAccount(eg.selfAccount.id);
-      final user = eg.user(avatarUrl: avatarUrl);
-      await store.addUser(user);
-
-      prepareBoringImageHttpClient();
-      await tester.pumpWidget(GlobalStoreWidget(
-        child: PerAccountStoreWidget(accountId: eg.selfAccount.id,
-          child: AvatarImage(userId: user.userId, size: size ?? 30))));
-      await tester.pump();
-      await tester.pump();
-      tester.widget(find.byType(AvatarImage));
-      final widgets = tester.widgetList<RealmContentNetworkImage>(
-        find.byType(RealmContentNetworkImage));
-      return widgets.firstOrNull?.src;
-    }
-
-    testWidgets('smoke with absolute URL', (tester) async {
-      const avatarUrl = 'https://example/avatar.png';
-      check(await actualUrl(tester, avatarUrl)).isNotNull()
-        .asString.equals(avatarUrl);
-      debugNetworkImageHttpClientProvider = null;
-    });
-
-    testWidgets('smoke with relative URL', (tester) async {
-      const avatarUrl = '/avatar.png';
-      check(await actualUrl(tester, avatarUrl))
-        .equals(store.tryResolveUrl(avatarUrl)!);
-      debugNetworkImageHttpClientProvider = null;
-    });
-
-   testWidgets('absolute URL, larger size', (tester) async {
-      tester.view.devicePixelRatio = 2.5;
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      const avatarUrl = 'https://example/avatar.png';
-      check(await actualUrl(tester, avatarUrl, 50)).isNotNull()
-        .asString.equals(avatarUrl.replaceAll('.png', '-medium.png'));
-      debugNetworkImageHttpClientProvider = null;
-    });
-
-    testWidgets('relative URL, larger size', (tester) async {
-      tester.view.devicePixelRatio = 2.5;
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      const avatarUrl = '/avatar.png';
-      check(await actualUrl(tester, avatarUrl, 50))
-        .equals(store.tryResolveUrl('/avatar-medium.png')!);
-      debugNetworkImageHttpClientProvider = null;
-    });
-
-    testWidgets('smoke with invalid URL', (tester) async {
-      const avatarUrl = '::not a URL::';
-      check(await actualUrl(tester, avatarUrl)).isNull();
-      debugNetworkImageHttpClientProvider = null;
-    });
-  });
-
   group('MessageTable', () {
     testFontWeight('bold column header label',
       // | a | b | c | d |
@@ -1459,46 +1383,4 @@ void main() {
       check(linkText.textAlign).equals(TextAlign.center);
     });
   });
-}
-
-Future<void> _loadKatexFonts() async {
-  const fonts = {
-    'KaTeX_AMS': ['KaTeX_AMS-Regular.ttf'],
-    'KaTeX_Caligraphic': [
-      'KaTeX_Caligraphic-Regular.ttf',
-      'KaTeX_Caligraphic-Bold.ttf',
-    ],
-    'KaTeX_Fraktur': [
-      'KaTeX_Fraktur-Regular.ttf',
-      'KaTeX_Fraktur-Bold.ttf',
-    ],
-    'KaTeX_Main': [
-      'KaTeX_Main-Regular.ttf',
-      'KaTeX_Main-Bold.ttf',
-      'KaTeX_Main-Italic.ttf',
-      'KaTeX_Main-BoldItalic.ttf',
-    ],
-    'KaTeX_Math': [
-      'KaTeX_Math-Italic.ttf',
-      'KaTeX_Math-BoldItalic.ttf',
-    ],
-    'KaTeX_SansSerif': [
-      'KaTeX_SansSerif-Regular.ttf',
-      'KaTeX_SansSerif-Bold.ttf',
-      'KaTeX_SansSerif-Italic.ttf',
-    ],
-    'KaTeX_Script': ['KaTeX_Script-Regular.ttf'],
-    'KaTeX_Size1': ['KaTeX_Size1-Regular.ttf'],
-    'KaTeX_Size2': ['KaTeX_Size2-Regular.ttf'],
-    'KaTeX_Size3': ['KaTeX_Size3-Regular.ttf'],
-    'KaTeX_Size4': ['KaTeX_Size4-Regular.ttf'],
-    'KaTeX_Typewriter': ['KaTeX_Typewriter-Regular.ttf'],
-  };
-  for (final MapEntry(key: fontFamily, value: fontFiles) in fonts.entries) {
-    final fontLoader = FontLoader(fontFamily);
-    for (final fontFile in fontFiles) {
-      fontLoader.addFont(rootBundle.load('assets/KaTeX/$fontFile'));
-    }
-    await fontLoader.load();
-  }
 }

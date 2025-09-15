@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -11,17 +10,11 @@ import 'package:intl/intl.dart' as intl;
 import '../api/core.dart';
 import '../api/model/model.dart';
 import '../generated/l10n/zulip_localizations.dart';
-import '../model/avatar_url.dart';
-import '../model/binding.dart';
 import '../model/content.dart';
-import '../model/emoji.dart';
 import '../model/internal_link.dart';
-import '../model/katex.dart';
-import '../model/presence.dart';
 import 'actions.dart';
 import 'code_block.dart';
 import 'dialog.dart';
-import 'emoji.dart';
 import 'icons.dart';
 import 'inset_shadow.dart';
 import 'katex.dart';
@@ -834,235 +827,6 @@ class MathBlock extends StatelessWidget {
   }
 }
 
-/// Creates a base text style for rendering KaTeX content.
-///
-/// This applies the CSS styles defined in .katex class in katex.scss :
-///   https://github.com/KaTeX/KaTeX/blob/613c3da8/src/styles/katex.scss#L13-L15
-///
-/// Requires the [style.fontSize] to be non-null.
-TextStyle mkBaseKatexTextStyle(TextStyle style) {
-  return style.copyWith(
-    fontSize: style.fontSize! * 1.21,
-    fontFamily: 'KaTeX_Main',
-    height: 1.2,
-    fontWeight: FontWeight.normal,
-    fontStyle: FontStyle.normal,
-    textBaseline: TextBaseline.alphabetic,
-    leadingDistribution: TextLeadingDistribution.even,
-    decoration: TextDecoration.none,
-    fontFamilyFallback: const []);
-}
-
-@visibleForTesting
-class KatexWidget extends StatelessWidget {
-  const KatexWidget({
-    super.key,
-    required this.textStyle,
-    required this.nodes,
-  });
-
-  final TextStyle textStyle;
-  final List<KatexNode> nodes;
-
-  @override
-  Widget build(BuildContext context) {
-    Widget widget = _KatexNodeList(nodes: nodes);
-
-    return Directionality(
-      textDirection: TextDirection.ltr,
-      child: DefaultTextStyle(
-        style: mkBaseKatexTextStyle(textStyle).copyWith(
-          color: ContentTheme.of(context).textStylePlainParagraph.color),
-        child: widget));
-  }
-}
-
-class _KatexNodeList extends StatelessWidget {
-  const _KatexNodeList({required this.nodes});
-
-  final List<KatexNode> nodes;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text.rich(TextSpan(
-      children: List.unmodifiable(nodes.map((e) {
-        return WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          // Work around a bug where text inside a WidgetSpan could be scaled
-          // multiple times incorrectly, if the system font scale is larger
-          // than 1x.
-          // See: https://github.com/flutter/flutter/issues/126962
-          child: MediaQuery(
-            data: MediaQueryData(textScaler: TextScaler.noScaling),
-            child: switch (e) {
-              KatexSpanNode() => _KatexSpan(e),
-              KatexStrutNode() => _KatexStrut(e),
-              KatexVlistNode() => _KatexVlist(e),
-              KatexNegativeMarginNode() => _KatexNegativeMargin(e),
-            }));
-      }))));
-  }
-}
-
-class _KatexSpan extends StatelessWidget {
-  const _KatexSpan(this.node);
-
-  final KatexSpanNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    var em = DefaultTextStyle.of(context).style.fontSize!;
-
-    Widget widget = const SizedBox.shrink();
-    if (node.text != null) {
-      widget = Text(node.text!);
-    } else if (node.nodes != null && node.nodes!.isNotEmpty) {
-      widget = _KatexNodeList(nodes: node.nodes!);
-    }
-
-    final styles = node.styles;
-    // We expect vertical-align to be only present with the
-    // `strut` span, for which parser explicitly emits `KatexStrutNode`.
-    // So, this should always be null for non `strut` spans.
-    assert(styles.verticalAlignEm == null);
-
-    // Currently, we expect `top` to be only present with the
-    // vlist inner row span, and parser handles that explicitly.
-    assert(styles.topEm == null);
-
-    final fontFamily = styles.fontFamily;
-    final fontSize = switch (styles.fontSizeEm) {
-      double fontSizeEm => fontSizeEm * em,
-      null => null,
-    };
-    if (fontSize != null) em = fontSize;
-
-    final fontWeight = switch (styles.fontWeight) {
-      KatexSpanFontWeight.bold => FontWeight.bold,
-      null => null,
-    };
-    var fontStyle = switch (styles.fontStyle) {
-      KatexSpanFontStyle.normal => FontStyle.normal,
-      KatexSpanFontStyle.italic => FontStyle.italic,
-      null => null,
-    };
-
-    TextStyle? textStyle;
-    if (fontFamily != null ||
-        fontSize != null ||
-        fontWeight != null ||
-        fontStyle != null) {
-      // TODO(upstream) remove this workaround when upstream fixes the broken
-      //   rendering of KaTeX_Math font with italic font style on Android:
-      //     https://github.com/flutter/flutter/issues/167474
-      if (defaultTargetPlatform == TargetPlatform.android &&
-          fontFamily == 'KaTeX_Math') {
-        fontStyle = FontStyle.normal;
-      }
-
-      textStyle = TextStyle(
-        fontFamily: fontFamily,
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        fontStyle: fontStyle,
-      );
-    }
-    final textAlign = switch (styles.textAlign) {
-      KatexSpanTextAlign.left => TextAlign.left,
-      KatexSpanTextAlign.center => TextAlign.center,
-      KatexSpanTextAlign.right => TextAlign.right,
-      null => null,
-    };
-
-    if (textStyle != null || textAlign != null) {
-      widget = DefaultTextStyle.merge(
-        style: textStyle,
-        textAlign: textAlign,
-        child: widget);
-    }
-
-    widget = SizedBox(
-      height: styles.heightEm != null
-        ? styles.heightEm! * em
-        : null,
-      child: widget);
-
-    final margin = switch ((styles.marginLeftEm, styles.marginRightEm)) {
-      (null, null) => null,
-      (null, final marginRightEm?) =>
-        EdgeInsets.only(right: marginRightEm * em),
-      (final marginLeftEm?, null) =>
-        EdgeInsets.only(left: marginLeftEm * em),
-      (final marginLeftEm?, final marginRightEm?) =>
-        EdgeInsets.only(left: marginLeftEm * em, right: marginRightEm * em),
-    };
-
-    if (margin != null) {
-      assert(margin.isNonNegative);
-      widget = Padding(padding: margin, child: widget);
-    }
-
-    return widget;
-  }
-}
-
-class _KatexStrut extends StatelessWidget {
-  const _KatexStrut(this.node);
-
-  final KatexStrutNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    final em = DefaultTextStyle.of(context).style.fontSize!;
-
-    final verticalAlignEm = node.verticalAlignEm;
-    if (verticalAlignEm == null) {
-      return SizedBox(height: node.heightEm * em);
-    }
-
-    return SizedBox(
-      height: node.heightEm * em,
-      child: Baseline(
-        baseline: (verticalAlignEm + node.heightEm) * em,
-        baselineType: TextBaseline.alphabetic,
-        child: const Text('')),
-    );
-  }
-}
-
-class _KatexVlist extends StatelessWidget {
-  const _KatexVlist(this.node);
-
-  final KatexVlistNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    final em = DefaultTextStyle.of(context).style.fontSize!;
-
-    return Stack(children: List.unmodifiable(node.rows.map((row) {
-      return Transform.translate(
-        offset: Offset(0, row.verticalOffsetEm * em),
-        child: _KatexSpan(row.node));
-    })));
-  }
-}
-
-class _KatexNegativeMargin extends StatelessWidget {
-  const _KatexNegativeMargin(this.node);
-
-  final KatexNegativeMarginNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    final em = DefaultTextStyle.of(context).style.fontSize!;
-
-    return NegativeLeftOffset(
-      leftOffset: node.leftOffsetEm * em,
-      child: _KatexNodeList(nodes: node.nodes));
-  }
-}
-
 class WebsitePreview extends StatelessWidget {
   const WebsitePreview({super.key, required this.node});
 
@@ -1363,8 +1127,7 @@ class _InlineContentBuilder {
 
       case UnicodeEmojiNode():
         return TextSpan(text: node.emojiUnicode, recognizer: _recognizer,
-          style: widget.style
-            .merge(ContentTheme.of(_context!).textStyleEmoji));
+          style: ContentTheme.of(_context!).textStyleEmoji);
 
       case ImageEmojiNode():
         return WidgetSpan(alignment: PlaceholderAlignment.middle,
@@ -1374,9 +1137,8 @@ class _InlineContentBuilder {
         final nodes = node.nodes;
         return nodes == null
           ? TextSpan(
-              style: widget.style
-                .merge(ContentTheme.of(_context!).textStyleInlineMath)
-                .apply(fontSizeFactor: kInlineCodeFontSizeFactor),
+              style: ContentTheme.of(_context!).textStyleInlineMath
+                .copyWith(fontSize: widget.style.fontSize! * kInlineCodeFontSizeFactor),
               children: [TextSpan(text: node.texSource)])
           : WidgetSpan(
               alignment: PlaceholderAlignment.baseline,
@@ -1417,11 +1179,9 @@ class _InlineContentBuilder {
     // TODO `code`: find equivalent of web's `unicode-bidi: embed; direction: ltr`
 
     return _buildNodes(
-      style: widget.style
-        .merge(ContentTheme.of(_context!).textStyleInlineCode)
-        .apply(fontSizeFactor: kInlineCodeFontSizeFactor),
-      node.nodes,
-    );
+      style: ContentTheme.of(_context!).textStyleInlineCode
+        .copyWith(fontSize: widget.style.fontSize! * kInlineCodeFontSizeFactor),
+      node.nodes);
 
     // Another fun solution -- we can in fact have a border!  Like so:
     //   TextStyle(
@@ -1540,13 +1300,26 @@ class GlobalTime extends StatelessWidget {
   final GlobalTimeNode node;
   final TextStyle ambientTextStyle;
 
-  static final _dateFormat = intl.DateFormat('EEE, MMM d, y, h:mm a'); // TODO(i18n): localize date
+  static final _format12 =
+    intl.DateFormat('EEE, MMM d, y').addPattern('h:mm aa', ', ');
+  static final _format24 =
+    intl.DateFormat('EEE, MMM d, y').addPattern('Hm', ', ');
+  static final _formatLocaleDefault =
+    intl.DateFormat('EEE, MMM d, y').addPattern('jm', ', ');
 
   @override
   Widget build(BuildContext context) {
+    final store = PerAccountStoreWidget.of(context);
+    final twentyFourHourTimeMode = store.userSettings.twentyFourHourTime;
     // Design taken from css for `.rendered_markdown & time` in web,
     //   see zulip:web/styles/rendered_markdown.css .
-    final text = _dateFormat.format(node.datetime.toLocal());
+    // TODO(i18n): localize; see plan with ffi in #45
+    final format = switch (twentyFourHourTimeMode) {
+      TwentyFourHourTimeMode.twelveHour => _format12,
+      TwentyFourHourTimeMode.twentyFourHour => _format24,
+      TwentyFourHourTimeMode.localeDefault => _formatLocaleDefault,
+    };
+    final text = format.format(node.datetime.toLocal());
     final contentTheme = ContentTheme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -1772,368 +1545,6 @@ class RealmContentNetworkImage extends StatelessWidget {
     );
   }
 }
-
-/// A rounded square with size [size] showing a user's avatar.
-class Avatar extends StatelessWidget {
-  const Avatar({
-    super.key,
-    required this.userId,
-    required this.size,
-    required this.borderRadius,
-    this.backgroundColor,
-    this.showPresence = true,
-    this.replaceIfMuted = true,
-  });
-
-  final int userId;
-  final double size;
-  final double borderRadius;
-  final Color? backgroundColor;
-  final bool showPresence;
-  final bool replaceIfMuted;
-
-  @override
-  Widget build(BuildContext context) {
-    // (The backgroundColor is only meaningful if presence will be shown;
-    // see [PresenceCircle.backgroundColor].)
-    assert(backgroundColor == null || showPresence);
-    return AvatarShape(
-      size: size,
-      borderRadius: borderRadius,
-      backgroundColor: backgroundColor,
-      userIdForPresence: showPresence ? userId : null,
-      child: AvatarImage(userId: userId, size: size, replaceIfMuted: replaceIfMuted));
-  }
-}
-
-/// The appropriate avatar image for a user ID.
-///
-/// If the user isn't found, gives a [SizedBox.shrink].
-///
-/// Wrap this with [AvatarShape].
-class AvatarImage extends StatelessWidget {
-  const AvatarImage({
-    super.key,
-    required this.userId,
-    required this.size,
-    this.replaceIfMuted = true,
-  });
-
-  final int userId;
-  final double size;
-  final bool replaceIfMuted;
-
-  @override
-  Widget build(BuildContext context) {
-    final store = PerAccountStoreWidget.of(context);
-    final user = store.getUser(userId);
-
-    if (user == null) { // TODO(log)
-      return const SizedBox.shrink();
-    }
-
-    if (replaceIfMuted && store.isUserMuted(userId)) {
-      return _AvatarPlaceholder(size: size);
-    }
-
-    final resolvedUrl = switch (user.avatarUrl) {
-      null          => null, // TODO(#255): handle computing gravatars
-      var avatarUrl => store.tryResolveUrl(avatarUrl),
-    };
-
-    if (resolvedUrl == null) {
-      return const SizedBox.shrink();
-    }
-
-    final avatarUrl = AvatarUrl.fromUserData(resolvedUrl: resolvedUrl);
-    final physicalSize = (MediaQuery.devicePixelRatioOf(context) * size).ceil();
-
-    return RealmContentNetworkImage(
-      avatarUrl.get(physicalSize),
-      filterQuality: FilterQuality.medium,
-      fit: BoxFit.cover,
-    );
-  }
-}
-
-/// A placeholder avatar for muted users.
-///
-/// Wrap this with [AvatarShape].
-// TODO(#1558) use this as a fallback in more places (?) and update dartdoc.
-class _AvatarPlaceholder extends StatelessWidget {
-  const _AvatarPlaceholder({required this.size});
-
-  /// The size of the placeholder box.
-  ///
-  /// This should match the `size` passed to the wrapping [AvatarShape].
-  /// The placeholder's icon will be scaled proportionally to this.
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final designVariables = DesignVariables.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(color: designVariables.avatarPlaceholderBg),
-      child: Icon(ZulipIcons.person,
-        // Where the avatar placeholder appears in the Figma,
-        // this is how the icon is sized proportionally to its box.
-        size: size * 20 / 32,
-        color: designVariables.avatarPlaceholderIcon));
-  }
-}
-
-/// A rounded square shape, to wrap an [AvatarImage] or similar.
-///
-/// If [userIdForPresence] is provided, this will paint a [PresenceCircle]
-/// on the shape.
-class AvatarShape extends StatelessWidget {
-  const AvatarShape({
-    super.key,
-    required this.size,
-    required this.borderRadius,
-    this.backgroundColor,
-    this.userIdForPresence,
-    required this.child,
-  });
-
-  final double size;
-  final double borderRadius;
-  final Color? backgroundColor;
-  final int? userIdForPresence;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    // (The backgroundColor is only meaningful if presence will be shown;
-    // see [PresenceCircle.backgroundColor].)
-    assert(backgroundColor == null || userIdForPresence != null);
-
-    Widget result = SizedBox.square(
-      dimension: size,
-      child: ClipRRect(
-        borderRadius: BorderRadius.all(Radius.circular(borderRadius)),
-        clipBehavior: Clip.antiAlias,
-        child: child));
-
-    if (userIdForPresence != null) {
-      final presenceCircleSize = size / 4; // TODO(design) is this right?
-      result = Stack(children: [
-        result,
-        Positioned.directional(textDirection: Directionality.of(context),
-          end: 0,
-          bottom: 0,
-          child: PresenceCircle(
-            userId: userIdForPresence!,
-            size: presenceCircleSize,
-            backgroundColor: backgroundColor)),
-      ]);
-    }
-
-    return result;
-  }
-}
-
-/// The green or orange-gradient circle representing [PresenceStatus].
-///
-/// [backgroundColor] must not be [Colors.transparent].
-/// It exists to match the background on which the avatar image is painted.
-/// If [backgroundColor] is not passed, [DesignVariables.mainBackground] is used.
-///
-/// By default, nothing paints for a user in the "offline" status
-/// (i.e. a user without a [PresenceStatus]).
-/// Pass true for [explicitOffline] to paint a gray circle.
-class PresenceCircle extends StatefulWidget {
-  const PresenceCircle({
-    super.key,
-    required this.userId,
-    required this.size,
-    this.backgroundColor,
-    this.explicitOffline = false,
-  });
-
-  final int userId;
-  final double size;
-  final Color? backgroundColor;
-  final bool explicitOffline;
-
-  /// Creates a [WidgetSpan] with a [PresenceCircle], for use in rich text
-  /// before a user's name.
-  ///
-  /// The [PresenceCircle] will have `explicitOffline: true`.
-  static InlineSpan asWidgetSpan({
-    required int userId,
-    required double fontSize,
-    required TextScaler textScaler,
-    Color? backgroundColor,
-  }) {
-    final size = textScaler.scale(fontSize) / 2;
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: Padding(
-        padding: const EdgeInsetsDirectional.only(end: 4),
-        child: PresenceCircle(
-          userId: userId,
-          size: size,
-          backgroundColor: backgroundColor,
-          explicitOffline: true)));
-  }
-
-  @override
-  State<PresenceCircle> createState() => _PresenceCircleState();
-}
-
-class _PresenceCircleState extends State<PresenceCircle> with PerAccountStoreAwareStateMixin {
-  Presence? model;
-
-  @override
-  void onNewStore() {
-    model?.removeListener(_modelChanged);
-    model = PerAccountStoreWidget.of(context).presence
-      ..addListener(_modelChanged);
-  }
-
-  @override
-  void dispose() {
-    model!.removeListener(_modelChanged);
-    super.dispose();
-  }
-
-  void _modelChanged() {
-    setState(() {
-      // The actual state lives in [model].
-      // This method was called because that just changed.
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final status = model!.presenceStatusForUser(
-      widget.userId, utcNow: ZulipBinding.instance.utcNow());
-    final designVariables = DesignVariables.of(context);
-    final effectiveBackgroundColor = widget.backgroundColor ?? designVariables.mainBackground;
-    assert(effectiveBackgroundColor != Colors.transparent);
-
-    Color? color;
-    LinearGradient? gradient;
-    switch (status) {
-      case null:
-        if (widget.explicitOffline) {
-          // TODO(a11y) this should be an open circle, like on web,
-          //   to differentiate by shape (vs. the "active" status which is also
-          //   a solid circle)
-          color = designVariables.statusAway;
-        } else {
-          return SizedBox.square(dimension: widget.size);
-        }
-      case PresenceStatus.active:
-        color = designVariables.statusOnline;
-      case PresenceStatus.idle:
-        gradient = LinearGradient(
-          begin: AlignmentDirectional.centerStart,
-          end: AlignmentDirectional.centerEnd,
-          colors: [designVariables.statusIdle, effectiveBackgroundColor],
-          stops: [0.05, 1.00],
-        );
-    }
-
-    return SizedBox.square(dimension: widget.size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: effectiveBackgroundColor,
-            width: 2,
-            strokeAlign: BorderSide.strokeAlignOutside),
-          color: color,
-          gradient: gradient,
-          shape: BoxShape.circle)));
-  }
-}
-
-/// A user status emoji to be displayed in different parts of the app.
-///
-/// Use [padding] to control the padding of status emoji from neighboring
-/// widgets.
-/// When there is no status emoji to be shown, the padding will be omitted too.
-///
-/// Use [neverAnimate] to forcefully disable the animation for animated emojis.
-/// Defaults to true.
-class UserStatusEmoji extends StatelessWidget {
-  const UserStatusEmoji({
-    super.key,
-    required this.userId,
-    required this.size,
-    this.padding = EdgeInsets.zero,
-    this.neverAnimate = true,
-  });
-
-  final int userId;
-  final double size;
-  final EdgeInsetsGeometry padding;
-  final bool neverAnimate;
-
-  static const double _spanPadding = 4;
-
-  /// Creates a [WidgetSpan] with a [UserStatusEmoji], for use in rich text;
-  /// before or after a text span.
-  ///
-  /// Use [position] to tell the emoji span where it is located relative to
-  /// another span, so that it can adjust the necessary padding from it.
-  static InlineSpan asWidgetSpan({
-    required int userId,
-    required double fontSize,
-    required TextScaler textScaler,
-    StatusEmojiPosition position = StatusEmojiPosition.after,
-    bool neverAnimate = true,
-  }) {
-    final (double paddingStart, double paddingEnd) = switch (position) {
-      StatusEmojiPosition.before => (0,            _spanPadding),
-      StatusEmojiPosition.after  => (_spanPadding, 0),
-    };
-    final size = textScaler.scale(fontSize);
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: UserStatusEmoji(userId: userId, size: size,
-        padding: EdgeInsetsDirectional.only(start: paddingStart, end: paddingEnd),
-        neverAnimate: neverAnimate));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final store = PerAccountStoreWidget.of(context);
-    final emoji = store.getUserStatus(userId).emoji;
-
-    final placeholder = SizedBox.shrink();
-    if (emoji == null) return placeholder;
-
-    final emojiDisplay = store.emojiDisplayFor(
-      emojiType: emoji.reactionType,
-      emojiCode: emoji.emojiCode,
-      emojiName: emoji.emojiName)
-        // Web doesn't seem to respect the emojiset user settings for user status.
-        // .resolve(store.userSettings)
-    ;
-    return switch (emojiDisplay) {
-      UnicodeEmojiDisplay() => Padding(
-        padding: padding,
-        child: UnicodeEmojiWidget(size: size, emojiDisplay: emojiDisplay)),
-      ImageEmojiDisplay() => Padding(
-        padding: padding,
-        child: ImageEmojiWidget(
-          size: size,
-          emojiDisplay: emojiDisplay,
-          neverAnimate: neverAnimate,
-          // If image emoji fails to load, show nothing.
-          errorBuilder: (_, _, _) => placeholder)),
-      // The user-status feature doesn't support a :text_emoji:-style display.
-      // Also, if an image emoji's URL string doesn't parse, it'll fall back to
-      // a :text_emoji:-style display. We show nothing for this case.
-      TextEmojiDisplay() => placeholder,
-    };
-  }
-}
-
-/// The position of the status emoji span relative to another text span.
-enum StatusEmojiPosition { before, after }
 
 //
 // Small helpers.

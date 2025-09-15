@@ -7,17 +7,20 @@ import 'package:flutter/foundation.dart';
 
 import '../api/exception.dart';
 import '../api/model/events.dart';
+import '../api/model/initial_snapshot.dart';
 import '../api/model/model.dart';
 import '../api/route/messages.dart';
 import '../log.dart';
 import 'binding.dart';
+import 'channel.dart';
 import 'message_list.dart';
+import 'realm.dart';
 import 'store.dart';
 
 const _apiSendMessage = sendMessage; // Bit ugly; for alternatives, see: https://chat.zulip.org/#narrow/stream/243-mobile-team/topic/flutter.3A.20PerAccountStore.20methods/near/1545809
 
 /// The portion of [PerAccountStore] for messages and message lists.
-mixin MessageStore {
+mixin MessageStore on ChannelStore {
   /// All known messages, indexed by [Message.id].
   Map<int, Message> get messages;
 
@@ -45,23 +48,6 @@ mixin MessageStore {
   /// or [OutboxMessageState.waitPeriodExpired].
   OutboxMessage takeOutboxMessage(int localMessageId);
 
-  /// Reconcile a batch of just-fetched messages with the store,
-  /// mutating the list.
-  ///
-  /// This is called after a [getMessages] request to report the result
-  /// to the store.
-  ///
-  /// The list's length will not change, but some entries may be replaced
-  /// by a different [Message] object with the same [Message.id],
-  /// or mutated to remove [Message.matchContent] and [Message.matchTopic]
-  /// (since these are appropriate for search views but not the central store).
-  /// All [Message] objects in the resulting list will be present in
-  /// [this.messages].
-  ///
-  /// [Message.matchTopic] and [Message.matchContent] should be captured,
-  /// as needed for search, before this is called.
-  void reconcileMessages(List<Message> messages);
-
   /// Whether the current edit request for the given message, if any, has failed.
   ///
   /// Will be null if there is no current edit request.
@@ -69,15 +55,20 @@ mixin MessageStore {
   /// and the update-message event hasn't arrived.
   bool? getEditMessageErrorStatus(int messageId);
 
-  /// Edit a message's content, via a request to the server.
+  /// Makes an edit-message request and starts an edit-outbox lifecycle.
   ///
   /// Should only be called when there is no current edit request for [messageId],
   /// i.e., [getEditMessageErrorStatus] returns null for [messageId].
   ///
+  /// The returned [Future] settles when the edit-message response is received.
+  /// The [Future] resolves if the request succeeded and rejects if it failed,
+  /// unless the event already arrived or the message was deleted,
+  /// in which case it resolves.
+  ///
   /// See also:
   ///   * [getEditMessageErrorStatus]
   ///   * [takeFailedMessageEdit]
-  void editMessage({
+  Future<void> editMessage({
     required int messageId,
     required String originalRawContent,
     required String newContent,
@@ -88,6 +79,169 @@ mixin MessageStore {
   /// Should only be called when there is a failed request,
   /// per [getEditMessageErrorStatus].
   ({String originalRawContent, String newContent}) takeFailedMessageEdit(int messageId);
+
+  /// Whether the user has permission to delete a message, as of [atDate].
+  ///
+  /// For a value of [atDate], use [ZulipBinding.instance.utcNow].
+  bool selfCanDeleteMessage(int messageId, {required DateTime atDate}) {
+    // Compare web's message_delete.get_deletability.
+
+    final message = messages[messageId];
+    if (message == null) {
+      assert(false); // TODO(log)
+      return true;
+    }
+
+    final ZulipStream? channel;
+    if (message is StreamMessage) {
+      channel = streams[message.streamId];
+      if (channel == null) {
+        assert(false); // TODO(log)
+        return true;
+      }
+    } else {
+      channel = null;
+    }
+
+    if (channel != null && channel.isArchived) {
+      return false;
+    }
+
+    // TODO(#1850) really the default should be `role:administrators`:
+    //   https://github.com/zulip/zulip-flutter/pull/1842#discussion_r2331362461
+    if (realmCanDeleteAnyMessageGroup != null
+        && selfHasPermissionForGroupSetting(realmCanDeleteAnyMessageGroup!,
+             GroupSettingType.realm, 'can_delete_any_message_group')) {
+      return true;
+    }
+
+    if (channel != null) {
+      if (channel.canDeleteAnyMessageGroup != null
+          && selfHasPermissionForGroupSetting(channel.canDeleteAnyMessageGroup!,
+               GroupSettingType.stream, 'can_delete_any_message_group')) {
+        return true;
+      }
+    }
+
+    final sender = getUser(message.senderId);
+    if (sender == null) return false;
+
+    if (!(
+      sender.userId == selfUserId
+      || (sender.isBot && sender.botOwnerId == selfUserId)
+    )) {
+      return false;
+    }
+
+    // Web returns false here for local-echoed message objects;
+    // that's impossible here because `message` can't be an [OutboxMessage]
+    // (it's a [Message] from [MessageStore.messages]).
+
+    if (realmCanDeleteOwnMessageGroup != null) {
+      if (!selfHasPermissionForGroupSetting(realmCanDeleteOwnMessageGroup!,
+            GroupSettingType.realm, 'can_delete_own_message_group')) {
+        if (channel == null) {
+          // i.e. this is a DM
+          return false;
+        }
+
+        if (
+          channel.canDeleteOwnMessageGroup == null
+          || !selfHasPermissionForGroupSetting(channel.canDeleteOwnMessageGroup!,
+               GroupSettingType.stream, 'can_delete_own_message_group')
+        ) {
+          return false;
+        }
+      }
+    } else if (realmDeleteOwnMessagePolicy != null) {
+      if (!_selfPassesLegacyDeleteMessagePolicy(messageId, atDate: atDate)) {
+        return false;
+      }
+    } else {
+      assert(false); // TODO(log)
+      return true;
+    }
+
+    if (realmMessageContentDeleteLimitSeconds == null) {
+      // i.e., no limit
+      return true;
+    }
+    return atDate.millisecondsSinceEpoch ~/ 1000 - message.timestamp
+      <= realmMessageContentDeleteLimitSeconds!;
+  }
+
+  bool _selfPassesLegacyDeleteMessagePolicy(int messageId, {required DateTime atDate}) {
+    assert(realmDeleteOwnMessagePolicy != null);
+    final role = selfUser.role;
+
+    // (Could early-return true on [UserRole.unknown],
+    // but pre-291 servers shouldn't be giving us an unknown role.)
+
+    switch (realmDeleteOwnMessagePolicy!) {
+      case RealmDeleteOwnMessagePolicy.everyone:
+        return true;
+      case RealmDeleteOwnMessagePolicy.members:
+        return role.isAtLeast(UserRole.member);
+      case RealmDeleteOwnMessagePolicy.fullMembers: {
+        if (!role.isAtLeast(UserRole.member)) return false;
+        if (role == UserRole.member) {
+          return hasPassedWaitingPeriod(selfUser, byDate: atDate);
+        }
+        return true;
+      }
+      case RealmDeleteOwnMessagePolicy.moderators:
+        return role.isAtLeast(UserRole.moderator);
+      case RealmDeleteOwnMessagePolicy.admins:
+        return role.isAtLeast(UserRole.administrator);
+    }
+  }
+}
+
+mixin ProxyMessageStore on MessageStore {
+  @protected
+  MessageStore get messageStore;
+
+  @override
+  Map<int, Message> get messages => messageStore.messages;
+  @override
+  Map<int, OutboxMessage> get outboxMessages => messageStore.outboxMessages;
+  @override
+  void registerMessageList(MessageListView view) =>
+    messageStore.registerMessageList(view);
+  @override
+  void unregisterMessageList(MessageListView view) =>
+    messageStore.unregisterMessageList(view);
+  @override
+  void markReadFromScroll(Iterable<int> messageIds) =>
+    messageStore.markReadFromScroll(messageIds);
+  @override
+  Future<void> sendMessage({required MessageDestination destination, required String content}) {
+    return messageStore.sendMessage(destination: destination, content: content);
+  }
+  @override
+  OutboxMessage takeOutboxMessage(int localMessageId) =>
+    messageStore.takeOutboxMessage(localMessageId);
+
+  @override
+  bool? getEditMessageErrorStatus(int messageId) {
+    return messageStore.getEditMessageErrorStatus(messageId);
+  }
+  @override
+  Future<void> editMessage({
+    required int messageId,
+    required String originalRawContent,
+    required String newContent,
+  }) {
+    return messageStore.editMessage(messageId: messageId,
+      originalRawContent: originalRawContent, newContent: newContent);
+  }
+  @override
+  ({String originalRawContent, String newContent}) takeFailedMessageEdit(int messageId) {
+    return messageStore.takeFailedMessageEdit(messageId);
+  }
+
+  @override
+  Set<MessageListView> get debugMessageListViews => messageStore.debugMessageListViews;
 }
 
 class _EditMessageRequestStatus {
@@ -102,24 +256,11 @@ class _EditMessageRequestStatus {
   final String newContent;
 }
 
-class MessageStoreImpl extends PerAccountStoreBase with MessageStore, _OutboxMessageStore {
-  MessageStoreImpl({required super.core, required String? realmEmptyTopicDisplayName})
-    : _realmEmptyTopicDisplayName = realmEmptyTopicDisplayName,
-      // There are no messages in InitialSnapshot, so we don't have
+class MessageStoreImpl extends HasChannelStore with MessageStore, _OutboxMessageStore {
+  MessageStoreImpl({required super.channels})
+    : // There are no messages in InitialSnapshot, so we don't have
       // a use case for initializing MessageStore with nonempty [messages].
       messages = {};
-
-  /// The display name to use for empty topics.
-  ///
-  /// This should only be accessed when FL >= 334, since topics cannot
-  /// be empty otherwise.
-  // TODO(server-10) simplify this
-  String get realmEmptyTopicDisplayName {
-    assert(zulipFeatureLevel >= 334);
-    assert(_realmEmptyTopicDisplayName != null); // TODO(log)
-    return _realmEmptyTopicDisplayName ?? 'general chat';
-  }
-  final String? _realmEmptyTopicDisplayName; // TODO(#668): update this realm setting
 
   @override
   final Map<int, Message> messages;
@@ -258,14 +399,9 @@ class MessageStoreImpl extends PerAccountStoreBase with MessageStore, _OutboxMes
         content: content,
         readBySender: true);
     }
-    return _outboxSendMessage(
-      destination: destination, content: content,
-      // TODO move [TopicName.processLikeServer] to a substore, eliminating this
-      //   see https://github.com/zulip/zulip-flutter/pull/1472#discussion_r2099069276
-      realmEmptyTopicDisplayName: _realmEmptyTopicDisplayName);
+    return _outboxSendMessage(destination: destination, content: content);
   }
 
-  @override
   void reconcileMessages(List<Message> messages) {
     assert(!_disposed);
     // What to do when some of the just-fetched messages are already known?
@@ -294,13 +430,15 @@ class MessageStoreImpl extends PerAccountStoreBase with MessageStore, _OutboxMes
   }
 
   @override
-  bool? getEditMessageErrorStatus(int messageId) =>
-    _editMessageRequests[messageId]?.hasError;
+  bool? getEditMessageErrorStatus(int messageId) {
+    assert(!_disposed);
+    return _editMessageRequests[messageId]?.hasError;
+  }
 
   final Map<int, _EditMessageRequestStatus> _editMessageRequests = {};
 
   @override
-  void editMessage({
+  Future<void> editMessage({
     required int messageId,
     required String originalRawContent,
     required String newContent,
@@ -334,6 +472,7 @@ class MessageStoreImpl extends PerAccountStoreBase with MessageStore, _OutboxMes
       }
       status.hasError = true;
       _notifyMessageListViewsForOneMessage(messageId);
+      rethrow;
     }
   }
 
@@ -388,9 +527,7 @@ class MessageStoreImpl extends PerAccountStoreBase with MessageStore, _OutboxMes
   }
 
   void _handleUpdateMessageEventTimestamp(UpdateMessageEvent event) {
-    // TODO(server-5): Cut this fallback; rely on renderingOnly from FL 114
-    final isRenderingOnly = event.renderingOnly ?? (event.userId == null);
-    if (event.editTimestamp == null || isRenderingOnly) {
+    if (event.renderingOnly) {
       // A rendering-only update gets omitted from the message edit history,
       // and [Message.lastEditTimestamp] is the last timestamp of that history.
       // So on a rendering-only update, the timestamp doesn't get updated.
@@ -780,7 +917,7 @@ class DmOutboxMessage extends OutboxMessage<DmConversation> {
 }
 
 /// Manages the outbox messages portion of [MessageStore].
-mixin _OutboxMessageStore on PerAccountStoreBase {
+mixin _OutboxMessageStore on HasRealmStore {
   late final UnmodifiableMapView<int, OutboxMessage> outboxMessages =
     UnmodifiableMapView(_outboxMessages);
   final Map<int, OutboxMessage> _outboxMessages = {};
@@ -856,7 +993,6 @@ mixin _OutboxMessageStore on PerAccountStoreBase {
   Future<void> _outboxSendMessage({
     required MessageDestination destination,
     required String content,
-    required String? realmEmptyTopicDisplayName,
   }) async {
     assert(!_disposed);
     final localMessageId = _nextLocalMessageId++;
@@ -866,8 +1002,7 @@ mixin _OutboxMessageStore on PerAccountStoreBase {
       StreamDestination(:final streamId, :final topic) =>
         StreamConversation(
           streamId,
-          _processTopicLikeServer(
-            topic, realmEmptyTopicDisplayName: realmEmptyTopicDisplayName),
+          _processTopicLikeServer(topic),
           displayRecipient: null),
       DmDestination(:final userIds) => DmConversation(allRecipientIds: userIds),
     };
@@ -926,25 +1061,22 @@ mixin _OutboxMessageStore on PerAccountStoreBase {
     }
   }
 
-  TopicName _processTopicLikeServer(TopicName topic, {
-    required String? realmEmptyTopicDisplayName,
-  }) {
-    return topic.processLikeServer(
-      // Processing this just once on creating the outbox message
-      // allows an uncommon bug, because either of these values can change.
-      // During the outbox message's life, a topic processed from
-      // "(no topic)" could become stale/wrong when zulipFeatureLevel
-      // changes; a topic processed from "general chat" could become
-      // stale/wrong when realmEmptyTopicDisplayName changes.
-      //
-      // Shrug. The same effect is caused by an unavoidable race:
-      // an admin could change the name of "general chat"
-      // (i.e. the value of realmEmptyTopicDisplayName)
-      // concurrently with the user making the send request,
-      // so that the setting in effect by the time the request arrives
-      // is different from the setting the client last heard about.
-      zulipFeatureLevel: zulipFeatureLevel,
-      realmEmptyTopicDisplayName: realmEmptyTopicDisplayName);
+  TopicName _processTopicLikeServer(TopicName topic) {
+    // Processing this just once on creating the outbox message
+    // allows an uncommon bug, because either of the values
+    // [zulipFeatureLevel] or [realmEmptyTopicDisplayName] can change.
+    // During the outbox message's life, a topic processed from
+    // "(no topic)" could become stale/wrong when zulipFeatureLevel
+    // changes; a topic processed from "general chat" could become
+    // stale/wrong when realmEmptyTopicDisplayName changes.
+    //
+    // Shrug. The same effect is caused by an unavoidable race:
+    // an admin could change the name of "general chat"
+    // (i.e. the value of realmEmptyTopicDisplayName)
+    // concurrently with the user making the send request,
+    // so that the setting in effect by the time the request arrives
+    // is different from the setting the client last heard about.
+    return processTopicLikeServer(topic);
   }
 
   void _handleOutboxDebounce(int localMessageId) {

@@ -1,4 +1,3 @@
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import '../api/model/model.dart';
 import '../generated/l10n/zulip_localizations.dart';
@@ -6,15 +5,15 @@ import '../model/autocomplete.dart';
 import '../model/narrow.dart';
 import '../model/store.dart';
 import 'color.dart';
-import 'content.dart';
 import 'icons.dart';
-import 'message_list.dart';
 import 'page.dart';
+import 'recent_dm_conversations.dart';
 import 'store.dart';
 import 'text.dart';
 import 'theme.dart';
+import 'user.dart';
 
-void showNewDmSheet(BuildContext context) {
+void showNewDmSheet(BuildContext context, OnDmSelectCallback onDmSelect) {
   final pageContext = PageRoot.contextOf(context);
   final store = PerAccountStoreWidget.of(context);
   showModalBottomSheet<void>(
@@ -30,12 +29,14 @@ void showNewDmSheet(BuildContext context) {
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: PerAccountStoreWidget(
         accountId: store.accountId,
-        child: NewDmPicker())));
+        child: NewDmPicker(onDmSelect: onDmSelect))));
 }
 
 @visibleForTesting
 class NewDmPicker extends StatefulWidget {
-  const NewDmPicker({super.key});
+  const NewDmPicker({super.key, required this.onDmSelect});
+
+  final OnDmSelectCallback onDmSelect;
 
   @override
   State<NewDmPicker> createState() => _NewDmPickerState();
@@ -69,9 +70,9 @@ class _NewDmPickerState extends State<NewDmPicker> with PerAccountStoreAwareStat
   }
 
   void _initSortedUsers(PerAccountStore store) {
-    final sansMuted = store.allUsers
-      .whereNot((user) => store.isUserMuted(user.userId));
-    sortedUsers = List<User>.from(sansMuted)
+    final users = store.allUsers
+      .where((user) => user.isActive && !store.isUserMuted(user.userId));
+    sortedUsers = List<User>.from(users)
       ..sort((a, b) => MentionAutocompleteView.compareByDms(a, b, store: store));
     _updateFilteredUsers(store);
   }
@@ -86,12 +87,14 @@ class _NewDmPickerState extends State<NewDmPicker> with PerAccountStoreAwareStat
   void _updateFilteredUsers(PerAccountStore store) {
     final excludeSelfUser = selectedUserIds.isNotEmpty
       && !selectedUserIds.contains(store.selfUserId);
-    final searchTextLower = searchController.text.toLowerCase();
+    final normalizedQuery =
+      AutocompleteQuery.lowercaseAndStripDiacritics(searchController.text);
 
     final result = <User>[];
     for (final user in sortedUsers) {
       if (excludeSelfUser && user.userId == store.selfUserId) continue;
-      if (user.fullName.toLowerCase().contains(searchTextLower)) {
+      final normalizedName = AutocompleteQuery.lowercaseAndStripDiacritics(user.fullName);
+      if (normalizedName.contains(normalizedQuery)) {
         result.add(user);
       }
     }
@@ -133,7 +136,7 @@ class _NewDmPickerState extends State<NewDmPicker> with PerAccountStoreAwareStat
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      _NewDmHeader(selectedUserIds: selectedUserIds),
+      _NewDmHeader(selectedUserIds: selectedUserIds, onDmSelect: widget.onDmSelect),
       _NewDmSearchBar(
         controller: searchController,
         selectedUserIds: selectedUserIds,
@@ -149,9 +152,10 @@ class _NewDmPickerState extends State<NewDmPicker> with PerAccountStoreAwareStat
 }
 
 class _NewDmHeader extends StatelessWidget {
-  const _NewDmHeader({required this.selectedUserIds});
+  const _NewDmHeader({required this.selectedUserIds, required this.onDmSelect});
 
   final Set<int> selectedUserIds;
+  final OnDmSelectCallback onDmSelect;
 
   Widget _buildCancelButton(BuildContext context) {
     final designVariables = DesignVariables.of(context);
@@ -179,8 +183,7 @@ class _NewDmHeader extends StatelessWidget {
         final narrow = DmNarrow.withUsers(
           selectedUserIds.toList(),
           selfUserId: store.selfUserId);
-        Navigator.pushReplacement(context,
-          MessageListPage.buildRoute(context: context, narrow: narrow));
+        onDmSelect(narrow);
       },
       child: Text(zulipLocalizations.newDmSheetComposeButtonLabel,
         style: TextStyle(
@@ -317,6 +320,8 @@ class _SelectedUserChip extends StatelessWidget {
                   fontSize: 16,
                   height: 16 / 16,
                   color: designVariables.labelMenuButton)))),
+          UserStatusEmoji(userId: userId, size: 16,
+            padding: EdgeInsetsDirectional.only(end: 4)),
         ])));
   }
 }
@@ -415,7 +420,11 @@ class _NewDmUserListItem extends StatelessWidget {
             Avatar(userId: userId, size: 32, borderRadius: 3),
             SizedBox(width: 8),
             Expanded(
-              child: Text(store.userDisplayName(userId),
+              child: Text.rich(
+                TextSpan(text: store.userDisplayName(userId), children: [
+                  UserStatusEmoji.asWidgetSpan(userId: userId, fontSize: 17,
+                    textScaler: MediaQuery.textScalerOf(context)),
+                ]),
                 style: TextStyle(
                   fontSize: 17,
                   height: 19 / 17,

@@ -42,7 +42,7 @@ browsing through recent commits and the codebase,
 and the Zulip guide to Git.
 
 To find possible issues to work on, see our [project board][].
-Look for issues up through the "Launch" milestone,
+Look for issues in the earliest milestone,
 and that aren't already assigned.
 
 Follow the Zulip guide to [picking an issue to work on][],
@@ -55,6 +55,7 @@ and describing your progress.
 
 [your first codebase contribution]: https://zulip.readthedocs.io/en/latest/contributing/contributing.html#your-first-codebase-contribution
 [what makes a great Zulip contributor]: https://zulip.readthedocs.io/en/latest/contributing/contributing.html#what-makes-a-great-zulip-contributor
+[project board]: https://github.com/orgs/zulip/projects/5/views/4
 [picking an issue to work on]: https://zulip.readthedocs.io/en/latest/contributing/contributing.html#picking-an-issue-to-work-on
 
 
@@ -96,6 +97,8 @@ Two specific points to expand on:
  * Your changes will need to be organized into
    [clear and coherent commits][commit-style],
    following [Zulip's commit style guide][commit-style].
+   (Use Greg's ["secret" to using `git log -p`][git-log-p-secret]
+   and/or a graphical Git client to see examples of mergeable commits.)
 
    This is always required before we can merge your PR.  Depending on
    your changes' complexity, it may also be required before we can
@@ -106,9 +109,10 @@ Two specific points to expand on:
 [working on an issue]: https://zulip.readthedocs.io/en/latest/contributing/contributing.html#working-on-an-issue
 [submitting a pull request]: https://zulip.readthedocs.io/en/latest/contributing/review-process.html
 [commit-style]: https://zulip.readthedocs.io/en/latest/contributing/commit-discipline.html
+[git-log-p-secret]: https://github.com/zulip/zulip-mobile/blob/main/docs/howto/git.md#git-log-secret
 
 
-## Getting started in developing this beta app
+## Getting started in developing
 
 ### Setting up
 
